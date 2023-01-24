@@ -1,0 +1,23 @@
+= AIMetaDB
+Andreas Weyer <dev@cbaoth.de>
+v0.1, 2023-01-24
+:toc:
+:toc-placement: auto
+//:sectnums:
+//:sectnumlevels: 3
+:source-highlighter: prettify
+//:source-highlighter: highlight.js
+
+== Summary
+THIS IS JUST A PROTOTYPE FOR NOW!
+
+=== Why?
+Latest after creating AI images using my https://github.com/cbaoth/userscripts#invoke-ai-tweaks[invoke-ai-tweaks] userscript I have a pretty big mess of images with random prompts, samplers, sizes, etc.
+
+=== What it does already
+* Read all metadata from https://github.com/invoke-ai/InvokeAI[InvokeAI] PNG files
+* Store this metadata in a Sqlite DB
+
+=== What I want it to do
+* Identify similarities between multiple image prompts, e.g. after organizing/rating them, which prompts work and which don't (to achive the best goals)
+* Organize/rename image files based on their similarities, e.g. group images with similar prompts

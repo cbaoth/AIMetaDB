@@ -1,0 +1,4 @@
+.venv
+.vscode
+ai_meta.db
+ai_meta.log
