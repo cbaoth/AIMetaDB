@@ -148,16 +148,14 @@ def file_hash(path):
     return sha256.hexdigest()
 
 
-def get_meta_db_values(path, png):
+def get_meta_db_values(path, png, hash):
     file_name = os.path.basename(path)
     meta_dict = png.info
     sd_meta = json.loads(meta_dict['sd-metadata'])
     # sd-metadata is a json-string, not a dict, so let's convert it to one
     meta_dict['sd-metadata'] = sd_meta
     meta_json = json.dumps(meta_dict)
-    image_hash = file_hash(path)
-    return {"image_hash": image_hash,
-            "file_name": file_name,
+    return {"file_name": file_name,
             "app_id": sd_meta['app_id'],
             "app_version": sd_meta['app_version'],
             "model_weights": sd_meta['model_weights'],
@@ -170,23 +168,32 @@ def get_meta_db_values(path, png):
             "height": sd_meta['image']['height'],
             "width": sd_meta['image']['width'],
             "seed": sd_meta['image']['seed'],
-            "png_info": meta_json}
+            "png_info": meta_json,
+            "image_hash": image_hash}
 
 
-def db_insert_png(path, png):
-    j = json.dumps(png.info, indent = 4)
-    log.debug("inserting file metadata into db: %s" % path_str)
-    sql_insert_meta = """INSERT INTO meta (image_hash, file_name, app_id, app_version,
+def db_get_meta_file_name_by_hash(image_hash):
+    sql_select = """SELECT file_name FROM meta WHERE image_hash = :image_hash;"""
+    cur = conn.cursor()
+    cur.execute(sql_select, {"image_hash": image_hash})
+    return cur.fetchone() is not None
+
+
+def db_insert_meta(path, png, image_hash):
+    log.debug("inserting meta in db for [image_hash: %s, path: \"%s\"" % (image_hash, path_str))
+    sql_insert_meta = """INSERT INTO meta (file_name, app_id, app_version,
                                            model_weights, model_hash, type, prompt,
                                            steps, cfg_scale, sampler,
-                                           height, width, seed, png_info)
-                         VALUES (:image_hash, :file_name, :app_id, :app_version,
+                                           height, width, seed, png_info,
+                                           image_hash)
+                         VALUES (:file_name, :app_id, :app_version,
                                  :model_weights, :model_hash, :type, :prompt,
                                  :steps, :cfg_scale, :sampler,
-                                 :height, :width, :seed, :png_info)"""
+                                 :height, :width, :seed, :png_info,
+                                 :image_hash);"""
     try:
         cur = conn.cursor()
-        meta_values = get_meta_db_values(path, png);
+        meta_values = get_meta_db_values(path, png, image_hash);
         log.debug("db INSERT into meta: %s" % str(meta_values))
         cur.execute(sql_insert_meta, meta_values)
         conn.commit()
@@ -203,8 +210,39 @@ def db_insert_png(path, png):
         log.debug("failed to insert duplicate png into db, existing record: %s" % str(val))
         conn.rollback()
     except Error as e:
-        log.error("failed to insert new png into db, transaction rollback:\n" % e)
+        log.error("failed to insert new meta into db, transaction rollback:\n" % e)
         conn.rollback()
+
+
+def db_update_meta(path, png, image_hash):
+    log.debug("updating meta in db for [image_hash: %s, path: \"%s\"" % (image_hash, path_str))
+    sql_update_meta = """UPDATE meta
+                         SET file_name = :file_name, app_id = :app_id, app_version = :app_version,
+                             model_weights = :model_weights, model_hash = :model_hash, type = :type, prompt = :prompt,
+                             steps = :steps, cfg_scale = :cfg_scale, sampler = :sampler,
+                             height = :height, width = :width, seed = :seed, png_info = :png_info
+                         WHERE image_hash = :image_hash;"""
+    try:
+        cur = conn.cursor()
+        meta_values = get_meta_db_values(path, png, image_hash);
+        log.debug("db UPDATE into meta: %s" % str(meta_values))
+        cur.execute(sql_update_meta, meta_values)
+        conn.commit()
+    except KeyError as e:
+        log.warning("skipping corrupted or non-invoke-ai [file_path: %s]" % path)
+    except Error as e:
+        log.error("failed to update existing meta in db, transaction rollback:\n" % e)
+        conn.rollback()
+
+
+def db_update_or_create_meta(path, png, image_hash):
+    file_name_org = db_get_meta_file_name_by_hash(image_hash)
+    if (file_name_org == None):
+        db_insert_meta(path, png, image_hash)
+    else:
+        if (file_name_org != os.path.basename(path)):
+            log.debug("updating meta, file_name will change from [\"%s\"] to [\"%s\"]" % (file_name_org, os.path.basename(path)))
+        db_update_meta(path, png, image_hash)
 
 
 if __name__ == '__main__':
@@ -226,7 +264,8 @@ if __name__ == '__main__':
             png.load() # needed to get for .png EXIF data
             #pp.pprint(meta)
             #print(png.info)
-            db_insert_png(path, png)
+            image_hash = file_hash(path)
+            db_update_or_create_meta(path, png, image_hash)
             #except Exception:
             #    log.errro("returning ...")
             #    break
