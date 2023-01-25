@@ -64,7 +64,7 @@ on windows with more verbose output:
  python main.py --recursive --loglevel_cl INFO "D:\sd\output\**\*.png"
 
 === Match file prompt against DB
-* Scan one or more png files comparing them with the db file prompts:
+Scan one or more png files comparing them with the db file prompts:
 
  ./main.py --mode MATCHDB --similarity_min 90 --sort_matches --loglevel_cl NONE sd/000016.b6a7a640.700956471.png
 
