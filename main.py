@@ -26,10 +26,10 @@ from thefuzz import fuzz, process
 #import imagehash
 from enum import Enum
 
-DEFAULT_DB_FILE = str(Path.home()) + "/ai_meta.db"
-DEFAULT_LOG_FILE = str(Path.home()) + "/ai_meta.log"
-DEFAULT_LOGLEVEL_FILE = "INFO"
-DEFAULT_LOGLEVEL_CL = "ERROR"
+DEFAULT_DB_FILE = str(Path.home()) + '/ai_meta.db'
+DEFAULT_LOG_FILE = str(Path.home()) + '/ai_meta.log'
+DEFAULT_LOGLEVEL_FILE = 'INFO'
+DEFAULT_LOGLEVEL_CL = 'ERROR'
 
 class Mode(Enum):
     UPDATEDB = 1
@@ -60,7 +60,7 @@ def args_init():
                         help='Log file location [default: %s]' % DEFAULT_LOG_FILE)
     parser.add_argument('--loglevel_file', type=str, default=DEFAULT_LOGLEVEL_FILE,
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
-                        help='Log level for log file [default: %s]' % DEFAULT_LOGLEVEL_FILE)
+                        help='Log level for log file [default: %s], loglevel_cl will overwrite if higher' % DEFAULT_LOGLEVEL_FILE)
     parser.add_argument('--loglevel_cl', type=str, default=DEFAULT_LOGLEVEL_CL,
                         choices=['NONE', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
                         help='Log level for command line output [default: %s], NONE for quiet mode (results only)' % DEFAULT_LOGLEVEL_CL)
@@ -71,7 +71,10 @@ def args_init():
 
 # initialize logger
 def log_init(logfile_path, level_file, level_cl):
-    # TODO logger args and default file
+    # TODO check if we can't just add a separate file handler and selt base consig to DEBUG
+    # cl level can't be higher than core log level
+    if (logging.getLevelName(level_cl) < logging.getLevelName(level_file)):
+        level_file = level_cl
     # https://docs.python.org/3/howto/logging.html
     logging.basicConfig(filename=logfile_path, #, encoding='utf-8',
                         format='%(asctime)s | %(levelname)s | %(message)s',
@@ -192,11 +195,12 @@ def db_get_meta_file_name_by_hash(image_hash):
     sql_select = """SELECT file_name FROM meta WHERE image_hash = :image_hash;"""
     cur = conn.cursor()
     cur.execute(sql_select, {"image_hash": image_hash})
-    return cur.fetchone() is not None
+    row = cur.fetchone()
+    return None if row is None else row[0]
 
 
 def db_insert_meta(path, png, image_hash):
-    log.debug("inserting meta in db for [image_hash: %s, path: \"%s\"" % (image_hash, path_str))
+    log.info("inserting meta in db for [image_hash: %s, path: \"%s\"" % (image_hash, str(path)))
     sql_insert_meta = """INSERT INTO meta (file_name, app_id, app_version,
                                            model_weights, model_hash, type, prompt,
                                            steps, cfg_scale, sampler,
@@ -231,7 +235,7 @@ def db_insert_meta(path, png, image_hash):
 
 
 def db_update_meta(path, png, image_hash):
-    log.debug("updating meta in db for [image_hash: %s, path: \"%s\"" % (image_hash, str(path)))
+    log.info("updating meta in db for [image_hash: %s, path: \"%s\"" % (image_hash, str(path)))
     sql_update_meta = """UPDATE meta
                          SET file_name = :file_name, app_id = :app_id, app_version = :app_version,
                              model_weights = :model_weights, model_hash = :model_hash, type = :type, prompt = :prompt,
@@ -253,17 +257,19 @@ def db_update_meta(path, png, image_hash):
 
 def db_update_or_create_meta(path, png, image_hash):
     file_name_org = db_get_meta_file_name_by_hash(image_hash)
-    if (file_name_org == None):
+    if (file_name_org == None):  # not found?
         db_insert_meta(path, png, image_hash)
-    else:
+    else:  # record with same image hash found
         if (file_name_org != os.path.basename(path)):
-            log.debug("updating meta, file_name will change from [\"%s\"] to [\"%s\"]" % (file_name_org, os.path.basename(path)))
+            log.debug("updating meta, file_name will change from [\"%s\"] to [\"%s\"]" %
+                      (file_name_org, os.path.basename(path)))
         db_update_meta(path, png, image_hash)
 
 
 def get_output_meta(dict):
     # escape double-quotes " in prompt (promt will be within " on output)
-    prompt_esc = re.sub(r'(["\\])', r'\\\1', dict['prompt']).strip()
+    # replace all newline with spaces
+    prompt_esc = re.sub(r'\r?\n', r' ', re.sub(r'(["\\])', r'\\\1', dict['prompt']).strip())
     return (dict['steps'], dict['cfg_scale'], dict['sampler'], dict['height'], dict['width'], dict['seed'],
             dict['model_hash'], dict['model_weights'], dict['type'], dict['image_hash'], dict['file_name'],
             dict['app_id'], dict['app_version'], prompt_esc)
@@ -295,6 +301,9 @@ def process_file(file_path):
     except UnidentifiedImageError:
         log.warning("Not a valid image file, skipping: %s" % file_path)
         return
+    except (AttributeError, IsADirectoryError):  # directory or other type?
+        log.warning("Not a file, skipping: %s" % file_path)
+        return
     image_hash = file_hash(file_path)
     if (mode == Mode.UPDATEDB):
         db_update_or_create_meta(file_path, png, image_hash)
@@ -309,7 +318,8 @@ def process_paths():
         start_time_path_arg = time.time()
         log.debug("processing [file_arg: \"%s\"] ..." % f)
         # single file or glob expansion
-        file_paths = [f] if f.exists() else [Path(p) for p in glob(str(f.expanduser()), recursive=args.recursive)]
+        # FIXME currently can't handle "./" recursion (maybe others too)
+        file_paths = [f] if (f.exists() and f.is_file()) else [Path(p) for p in glob(str(f.expanduser()), recursive=args.recursive)]
         for file_path in file_paths:
             start_time_file = time.time()
             log.info("processing [file: \"%s\"] ..." % file_path)
