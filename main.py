@@ -52,6 +52,8 @@ def args_init():
                         help='Processing mode [updatedb: add file meta to db, matchdb: match file meta with db')
     parser.add_argument('--similarity_min', type=int, default=0,
                         help='Filter matchdb mode results based on similarity >= X [default: 0]')
+    parser.add_argument('--sort_matches', action='store_true',
+                        help='Sort results by similartiy (desc) grouped by infile (WARNING: memory heavy when processing large result sets)')
     parser.add_argument('--recursive', action='store_true',
                         help='Process directories and ** glob patterns recursively')
     parser.add_argument('--dbfile', type=str, default=DEFAULT_DB_FILE,
@@ -73,7 +75,7 @@ def args_init():
 def log_init(logfile_path, level_file, level_cl):
     # TODO check if we can't just add a separate file handler and selt base consig to DEBUG
     # cl level can't be higher than core log level
-    if (logging.getLevelName(level_cl) < logging.getLevelName(level_file)):
+    if (level_cl != 'NONE' and (logging.getLevelName(level_cl) < logging.getLevelName(level_file))):
         level_file = level_cl
     # https://docs.python.org/3/howto/logging.html
     logging.basicConfig(filename=logfile_path, #, encoding='utf-8',
@@ -200,6 +202,7 @@ def db_get_meta_file_name_by_hash(image_hash):
 
 
 def db_insert_meta(path, png, image_hash):
+    file_name = os.path.basename(path)
     log.info("inserting meta in db for [image_hash: %s, path: \"%s\"" % (image_hash, str(path)))
     sql_insert_meta = """INSERT INTO meta (file_name, app_id, app_version,
                                            model_weights, model_hash, type, prompt,
@@ -222,12 +225,12 @@ def db_insert_meta(path, png, image_hash):
     except sqlite3.IntegrityError:
         res = cur.execute("SELECT file_name FROM meta WHERE image_hash = ?", (image_hash,))
         # todo: compare file names
-        val = res.fetchone()
-        if (val[0] == file_name):
-            log.info("skipping existing entry: [hash_hase: %s, file_name_old: \"%s\", file_name_new: \"%s\"]" % (image_hash, val[0], file_name))
+        row = res.fetchone()
+        if (row[0] == file_name):
+            log.info("skipping existing entry: [hash_hase: %s, file_name_old: \"%s\", file_name_new: \"%s\"]" % (image_hash, row[0], file_name))
         else:
             log.info("skipping existing entry: [hash_hase: %s, file_name: \"%s\"]" % (image_hash, file_name))
-        log.debug("failed to insert duplicate png into db, existing record: %s" % str(val))
+        log.debug("failed to insert duplicate png into db, existing record: %s" % str(dict((row))))
         conn.rollback()
     except Error as e:
         log.error("failed to insert new meta into db, transaction rollback:\n" % e)
@@ -266,35 +269,65 @@ def db_update_or_create_meta(path, png, image_hash):
         db_update_meta(path, png, image_hash)
 
 
-def get_output_meta(dict):
+def print_column_headrs():
+    print('in_file_idx | db_file_idx | file_source | similarity | steps | cfg_scale | sampler | height | width | seed | model_hash | model_weights | type | image_hash | file_name | app_id | app_version | prompt')
+
+
+def sanitize_prompt(prompt):
     # escape double-quotes " in prompt (promt will be within " on output)
     # replace all newline with spaces
+    return re.sub(r'\r?\n', r' ', re.sub(r'(["\\])', r'\\\1', prompt).strip())
+
+
+# convert meta dict to output tuple
+def meta_to_output_tuple(dict):
     prompt_esc = re.sub(r'\r?\n', r' ', re.sub(r'(["\\])', r'\\\1', dict['prompt']).strip())
     return (dict['steps'], dict['cfg_scale'], dict['sampler'], dict['height'], dict['width'], dict['seed'],
             dict['model_hash'], dict['model_weights'], dict['type'], dict['image_hash'], dict['file_name'],
-            dict['app_id'], dict['app_version'], prompt_esc)
+            dict['app_id'], dict['app_version'], sanitize_prompt(prompt_esc))
 
 
-def db_match(path, png, image_hash):
-    meta = get_meta_db_values(path, png, image_hash)
-    res = []
-    sql_select = """SELECT prompt, image_hash, file_name FROM meta;"""
+def db_match(path, png, image_hash, idx, sort=False):
+    result = []
+    print_pattern = "%s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | \"%s\""
+    file_meta = get_meta_db_values(path, png, image_hash)
+    file_meta['prompt'] = sanitize_prompt(file_meta['prompt'])
+    sql_select = """SELECT steps, cfg_scale, sampler, height, width, seed, model_hash, model_weights,
+                           type, image_hash, file_name, app_id, app_version, prompt FROM meta;"""
     cur = conn.cursor()
     cur.execute(sql_select)
     result_set = cur.fetchall()
-    log.debug("meta for file [\"%s\"]:\n%s" % (path, meta))
+    log.debug("meta for file [\"%s\"]:\n%s" % (path, file_meta))
     # TODO allow file output (nice to have, redirect possible)
-    print("file |  | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | \"%s\"" %
-          get_output_meta(meta))
+    file_printed = False
+    i = 1
     for row in result_set:
-        similarity = fuzz.token_set_ratio(row['prompt'], meta['prompt'])
-        if (similarity > args.similarity_min):
-            print("db | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | \"%s\"" %
-                  ((similarity,) + get_output_meta(meta)))
+        row_meta = dict(row)
+        row_meta['prompt'] = sanitize_prompt(row_meta['prompt'])
+        #print("-----> %s\n-----> %s" % (row_meta['prompt'], file_meta['prompt']))
+        similarity = fuzz.token_sort_ratio(row_meta['prompt'], file_meta['prompt'])
+        if (similarity >= args.similarity_min):
+            if (not file_printed):  # print current file in first iteration (not at all if no matches were found)
+                file_printed = True
+                t = (idx, i, 'file', 100) + meta_to_output_tuple(file_meta)
+                if (sort):
+                    result.append(t)
+                else:
+                    print(print_pattern % t)
+            t = (idx, i, 'db', similarity) + meta_to_output_tuple(row_meta)
+            if (sort):
+                result.append(t)
+            else:
+                print(print_pattern % t)
+        i = i+1
     cur.close()
+    if (sort):
+        for r in sorted(result, key=lambda x: (x[0], -x[3])):
+            print(print_pattern % r)
 
 
-def process_file(file_path):
+
+def process_file(file_path, idx):
     try:
         png = Image.open(str(file_path))
         png.load() # needed to get for .png EXIF data
@@ -308,24 +341,28 @@ def process_file(file_path):
     if (mode == Mode.UPDATEDB):
         db_update_or_create_meta(file_path, png, image_hash)
     else:  # Mode.MATCHDB
-        db_match(file_path, png, image_hash)
+        print_column_headrs()
+        db_match(file_path, png, image_hash, idx, args.sort_matches)
 
 
 def process_paths():
     start_time_proc = time.time()
     log.info("starting [mode=%s] ..." % args.mode)
+    idx = 1
     for f in args.infile:
         start_time_path_arg = time.time()
         log.debug("processing [file_arg: \"%s\"] ..." % f)
         # single file or glob expansion
         # FIXME currently can't handle "./" recursion (maybe others too)
         file_paths = [f] if (f.exists() and f.is_file()) else [Path(p) for p in glob(str(f.expanduser()), recursive=args.recursive)]
+
         for file_path in file_paths:
             start_time_file = time.time()
-            log.info("processing [file: \"%s\"] ..." % file_path)
-            process_file(file_path)
-            log.debug("finished processing file [exec_time: %ssec, file_path: \"%s\"]" %
-                      (round(time.time() - start_time_file, 3), file_path))
+            log.info("processing [#%s, file: \"%s\"] ..." % (idx, file_path))
+            process_file(file_path, idx)
+            log.debug("finished processing file [#%s, exec_time: %ssec, file_path: \"%s\"]" %
+                      (idx, round(time.time() - start_time_file, 3), file_path))
+            idx = idx + 1
         log.debug("finished processing file_arg [exec_time: %ssec, file_arg: \"%s\"]" %
                   (round(time.time() - start_time_path_arg, 3), f))
     log.info("finished [mode=%s, exec_time: %ssec]!" %
