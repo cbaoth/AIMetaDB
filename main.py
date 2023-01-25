@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 
 # https://packaging.python.org/en/latest/guides/installing-using-pip-and-virtual-environments/
-# pip install --user pillow
+# pip install pillow
 # https://pillow.readthedocs.io/en/stable/reference
 # https://pypi.org/project/ImageHash/
-
+# pip install thefuzz[speedup]
+# https://github.com/seatgeek/thefuzz
+# https://github.com/AUTOMATIC1111/stable-diffusion-webui-tokenizer
 
 import argparse
 from pathlib import Path
 #from typing import Iterable
 from glob import glob
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 import sqlite3
 from sqlite3 import Error
 import json
@@ -18,28 +20,70 @@ import sys, os
 import logging
 import hashlib
 import time
+import re
+from thefuzz import fuzz, process
 #from pprint import PrettyPrinter
 #import imagehash
+from enum import Enum
 
-DEFAULT_DB_FILE_NAME = "ai_meta.db"
+DEFAULT_DB_FILE = str(Path.home()) + "/ai_meta.db"
+DEFAULT_LOG_FILE = str(Path.home()) + "/ai_meta.log"
+DEFAULT_LOGLEVEL_FILE = "INFO"
+DEFAULT_LOGLEVEL_CL = "ERROR"
+
+class Mode(Enum):
+    UPDATEDB = 1
+    MATCHDB = 2
 
 log = logging
+args = None
 conn = None
+mode = Mode.MATCHDB
+
+
+
+# parse and return command line arguments
+def args_init():
+    parser = argparse.ArgumentParser(description='AIMetaDB - A Invoke-AI PNG file metadata processor')
+    parser.add_argument('infile', type=Path, nargs='+',
+                        help='One or more file names, directories, or glob patterns')
+    parser.add_argument('--mode', type=str, default='UPDATEDB',
+                        choices=['UPDATEDB', 'MATCHDB'],
+                        help='Processing mode [updatedb: add file meta to db, matchdb: match file meta with db')
+    parser.add_argument('--similarity_min', type=int, default=0,
+                        help='Filter matchdb mode results based on similarity >= X [default: 0]')
+    parser.add_argument('--recursive', action='store_true',
+                        help='Process directories and ** glob patterns recursively')
+    parser.add_argument('--dbfile', type=str, default=DEFAULT_DB_FILE,
+                        help='DB file location [default: %s]' % DEFAULT_DB_FILE)
+    parser.add_argument('--logfile', type=str, default=DEFAULT_LOG_FILE,
+                        help='Log file location [default: %s]' % DEFAULT_LOG_FILE)
+    parser.add_argument('--loglevel_file', type=str, default=DEFAULT_LOGLEVEL_FILE,
+                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+                        help='Log level for log file [default: %s]' % DEFAULT_LOGLEVEL_FILE)
+    parser.add_argument('--loglevel_cl', type=str, default=DEFAULT_LOGLEVEL_CL,
+                        choices=['NONE', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+                        help='Log level for command line output [default: %s], NONE for quiet mode (results only)' % DEFAULT_LOGLEVEL_CL)
+    global args, mode
+    args = parser.parse_args()
+    mode = Mode[args.mode]
+
 
 # initialize logger
-def log_init():
+def log_init(logfile_path, level_file, level_cl):
     # TODO logger args and default file
     # https://docs.python.org/3/howto/logging.html
-    logging.basicConfig(filename='ai_meta.log', encoding='utf-8',
+    logging.basicConfig(filename=logfile_path, #, encoding='utf-8',
                         format='%(asctime)s | %(levelname)s | %(message)s',
-                        level=logging.DEBUG)
+                        level=logging.getLevelName(level_file))
     global log
     log = logging.getLogger("app")
-    ch = logging.StreamHandler()
-    #ch.setLevel(logging.DEBUG)
-    ch.setLevel(logging.INFO)
-    ch.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')) #| %(name)s
-    log.addHandler(ch)
+    if (level_cl != 'NONE'):
+        # output logger info to stderr, any other output to stdout
+        ch = logging.StreamHandler(sys.stderr)
+        ch.setLevel(logging.getLevelName(level_cl))
+        ch.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')) #| %(name)s
+        log.addHandler(ch)
 
 
 # create a database connection to a SQLite database
@@ -47,6 +91,7 @@ def db_connect(db_file):
     global conn
     try:
         conn = sqlite3.connect(db_file)
+        conn.row_factory = sqlite3.Row  # we want dict results (vs plain lists)
         log.info("db version: %s" % sqlite3.version)
     except Error as e:
         log.error("unable to create db connection, exiting: %s" % e)
@@ -58,8 +103,9 @@ def db_connect(db_file):
 
 
 # initialize db if non-existing
-def db_init():
-    db_connect(DEFAULT_DB_FILE_NAME)
+def db_init(dbfile):
+    log.info("opening db connection to: %s" % dbfile)
+    db_connect(dbfile)
     sql_create_meta_table = """CREATE TABLE IF NOT EXISTS meta (
                                 id integer PRIMARY KEY,
                                 image_hash text NOT NULL UNIQUE,
@@ -80,16 +126,18 @@ def db_init():
                                 created_at date DEFAULT(DATETIME('now'))
                             ); """
 
-    #sql_create_meta_json_table = """CREATE TABLE IF NOT EXISTS json (
+    # keep large details in separate table only to be loaded if necessary
+    #sql_create_meta_json_table = """CREATE TABLE IF NOT EXISTS blobs (
     #                                id integer PRIMAY KEY,
     #                                meta_id integer,
     #                                json blob,
+    #                                png_info blob,
     #                                FOREIGN KEY(meta_id) REFERENCES meta(id)
     #                            );"""
     try:
         cur = conn.cursor()
-        cur.execute(f"PRAGMA foreign_keys = ON;")
-        log.info("ensuring db table exists: meta")
+        #cur.execute(f"PRAGMA foreign_keys = ON;")
+        log.debug("ensuring db table [meta] exists.")
         cur.execute(sql_create_meta_table);
         #log.info("ensuring db table exists: json")
         #cur.execute(sql_create_meta_json_table);
@@ -99,41 +147,9 @@ def db_init():
 
 
 def init():
-    log_init()
-    db_init()
-
-
-def args_parse():
-        # Instantiate the parser
-    parser = argparse.ArgumentParser(description='Invoke-AI PNG file metadata processor')
-
-    # Required positional argument
-    parser.add_argument('infile', nargs='+',
-                        help='One or more file names or directories')
-    # Optional positional argument
-    #parser.add_argument('file', type=int, nargs='?',
-    #                    help='An optional integer positional argument')
-    # Optional argument
-    #parser.add_argument('--opt_arg', type=int,
-    #                    help='An optional integer argument')
-    # Switch
-    #parser.add_argument('--switch', action='store_true',
-    #                    help='A boolean switch')
-    #def expandpath(path_pattern) -> Iterable[Path]:
-    #    p = Path(path_pattern).expanduser()
-    #    parts = p.parts[p.is_absolute():]
-    #    return Path(p.root).glob(str(Path(*parts)))
-    return parser.parse_args()
-
-
-# https://stackoverflow.com/a/49692185
-# def png_hash(png):
-#     img = png.resize((10, 10), Image.LANCZOS)
-#     img = img.convert("L")
-#     pixels = list(img.getdata())
-#     avg = sum(pixels)/len(pixels)
-#     bits = "".join(['1' if (px >= avg) else '0' for px in pixels])
-#     return str(hex(int(bits, 2)))[2:][::-1].upper()
+    args_init()
+    log_init(args.logfile, args.loglevel_file, args.loglevel_cl)
+    db_init(args.dbfile)
 
 
 def file_hash(path):
@@ -148,7 +164,7 @@ def file_hash(path):
     return sha256.hexdigest()
 
 
-def get_meta_db_values(path, png, hash):
+def get_meta_db_values(path, png, image_hash):
     file_name = os.path.basename(path)
     meta_dict = png.info
     sd_meta = json.loads(meta_dict['sd-metadata'])
@@ -215,7 +231,7 @@ def db_insert_meta(path, png, image_hash):
 
 
 def db_update_meta(path, png, image_hash):
-    log.debug("updating meta in db for [image_hash: %s, path: \"%s\"" % (image_hash, path_str))
+    log.debug("updating meta in db for [image_hash: %s, path: \"%s\"" % (image_hash, str(path)))
     sql_update_meta = """UPDATE meta
                          SET file_name = :file_name, app_id = :app_id, app_version = :app_version,
                              model_weights = :model_weights, model_hash = :model_hash, type = :type, prompt = :prompt,
@@ -245,29 +261,68 @@ def db_update_or_create_meta(path, png, image_hash):
         db_update_meta(path, png, image_hash)
 
 
+def get_output_meta(dict):
+    # escape double-quotes " in prompt (promt will be within " on output)
+    prompt_esc = re.sub(r'(["\\])', r'\\\1', dict['prompt']).strip()
+    return (dict['steps'], dict['cfg_scale'], dict['sampler'], dict['height'], dict['width'], dict['seed'],
+            dict['model_hash'], dict['model_weights'], dict['type'], dict['image_hash'], dict['file_name'],
+            dict['app_id'], dict['app_version'], prompt_esc)
+
+
+def db_match(path, png, image_hash):
+    meta = get_meta_db_values(path, png, image_hash)
+    res = []
+    sql_select = """SELECT prompt, image_hash, file_name FROM meta;"""
+    cur = conn.cursor()
+    cur.execute(sql_select)
+    result_set = cur.fetchall()
+    log.debug("meta for file [\"%s\"]:\n%s" % (path, meta))
+    # TODO allow file output (nice to have, redirect possible)
+    print("file |  | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | \"%s\"" %
+          get_output_meta(meta))
+    for row in result_set:
+        similarity = fuzz.token_set_ratio(row['prompt'], meta['prompt'])
+        if (similarity > args.similarity_min):
+            print("db | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | \"%s\"" %
+                  ((similarity,) + get_output_meta(meta)))
+    cur.close()
+
+
+def process_file(file_path):
+    try:
+        png = Image.open(str(file_path))
+        png.load() # needed to get for .png EXIF data
+    except UnidentifiedImageError:
+        log.warning("Not a valid image file, skipping: %s" % file_path)
+        return
+    image_hash = file_hash(file_path)
+    if (mode == Mode.UPDATEDB):
+        db_update_or_create_meta(file_path, png, image_hash)
+    else:  # Mode.MATCHDB
+        db_match(file_path, png, image_hash)
+
+
+def process_paths():
+    start_time_proc = time.time()
+    log.info("starting [mode=%s] ..." % args.mode)
+    for f in args.infile:
+        start_time_path_arg = time.time()
+        log.debug("processing [file_arg: \"%s\"] ..." % f)
+        # single file or glob expansion
+        file_paths = [f] if f.exists() else [Path(p) for p in glob(str(f.expanduser()), recursive=args.recursive)]
+        for file_path in file_paths:
+            start_time_file = time.time()
+            log.info("processing [file: \"%s\"] ..." % file_path)
+            process_file(file_path)
+            log.debug("finished processing file [exec_time: %ssec, file_path: \"%s\"]" %
+                      (round(time.time() - start_time_file, 3), file_path))
+        log.debug("finished processing file_arg [exec_time: %ssec, file_arg: \"%s\"]" %
+                  (round(time.time() - start_time_path_arg, 3), f))
+    log.info("finished [mode=%s, exec_time: %ssec]!" %
+             (mode.name, round(time.time() - start_time_proc, 3)))
+
+
 if __name__ == '__main__':
     init()
-    args = args_parse()
     start_time = time.time()
-    log.info("starting ...")
-    for f in args.infile:
-        log.info("processing [file_arg: \"%s\"] ..." % f)
-        #pathlist = expandpath(f) #Path().glob(f)
-        pathlist = [Path(p) for p in glob(str(Path(f).expanduser()))]
-        #log.debug("pathlist: %s" % pathlist)
-        #pp = PrettyPrinter(indent=2, width=120)
-        for path in pathlist:
-            path_start_time = time.time()
-            path_str = str(path)
-            log.info("processing [file: \"%s\"] ..." % path_str)
-            png = Image.open(path_str)
-            png.load() # needed to get for .png EXIF data
-            #pp.pprint(meta)
-            #print(png.info)
-            image_hash = file_hash(path)
-            db_update_or_create_meta(path, png, image_hash)
-            #except Exception:
-            #    log.errro("returning ...")
-            #    break
-            log.info("finished processing file [exec_time: %s, file_path: \"%s\"]" % (time.time() - path_start_time, path_str))
-    log.info("finished processing file_arg [exec_time: %s, file_arg: \"%s\"]" % (time.time() - start_time, f))
+    process_paths()

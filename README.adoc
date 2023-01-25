@@ -11,13 +11,61 @@ v0.1, 2023-01-24
 == Summary
 THIS IS JUST A PROTOTYPE FOR NOW!
 
-=== Why?
-Latest after creating AI images using my https://github.com/cbaoth/userscripts#invoke-ai-tweaks[invoke-ai-tweaks] userscript I have a pretty big mess of images with random prompts, samplers, sizes, etc.
+FOR NOW I'LL NOT ENSURE BACKWARD COMPATIBILITY BETWEEN VERSION, ESPECIALLY REGARDING THE DB!
+
+=== Why do this?
+Latest after creating AI images using my https://github.com/cbaoth/userscripts#invoke-ai-tweaks[invoke-ai-tweaks] userscript or other "mass production randomness madness" I have a pretty big mess of images with random prompts, samplers, sizes, etc. that are hard to sort/group and its hard to find out which settings and prompts work more than others.
+
+Main goals, means to ..
+* .. create a DB with all my Invoke-AI PNG files (image hash based).
+* .. find, group, etc. images based on metadata like promt content.
+* .. find, group, etc. images based on metadata similarities (e.g. similar prompts)
+** To find most promising settings (see what works and what doesn't).
+** To manually identify differences that mostly impact the result/style of images that have atherwise similar settings/prompts.
 
 === What it does already
-* Read all metadata from https://github.com/invoke-ai/InvokeAI[InvokeAI] PNG files
-* Store this metadata in a Sqlite DB
+* **Read all metadata from https://github.com/invoke-ai/InvokeAI[InvokeAI] PNG files**
+** *Metadata of other engines is not supported (yet), files with missing metadata will just be ignored.*
+* **Store this metadata in a Sqlite DB**
+** *Includes the current file name (may change) and a sha256 hash of the image data only (no metadata). I don't want actual image hashes (similarity) but a has for a given file to identify it again later on. It has to be seen if this approch is stable or not.*
+** All metadat is additionally stored as a json for future processing of properties that are yet unknown to the app or not specifically collected (field based, into DB columns).
+* **Find similarities between prompt texts from the DB and those of provided reference images.**
+** *Currently just a simple Levenshtein Distance metric (0 to 100).*
 
 === What I want it to do
 * Identify similarities between multiple image prompts, e.g. after organizing/rating them, which prompts work and which don't (to achive the best goals)
 * Organize/rename image files based on their similarities, e.g. group images with similar prompts
+
+=== What
+
+== Requirements
+
+Python 3.8+ and the following pips:
+
+ # https://pillow.readthedocs.io/ - to read png metadata
+ pip install pillow
+
+ # https://github.com/seatgeek/thefuzz - to find prompt similarities using  Levenshtein Distance
+ pip install "thefuzz[speedup]"
+
+== Usage
+
+Pretty basic (still a prototype):
+
+1. Scan invoke-ai png files putting their master data into the DB (insert or update based on hash code):
+
+ ./main.py --recursive "sd/output/**/*.png"
+
+on windows with more verbose output:
+
+ python main.py --recursive --loglevel_cl INFO "D:\sd\output\**\*.png"
+
+2. Scan one or more png files comparing them with the db file prompts:
+
+ ./main.py --mode matchdb --loglevel_cl NONE --similarity_min 98 "sd/my_ref_pictures/*.png" "sd/and_another_one.png"
+
+3. Help:
+
+ python main.py --help
+
+Per default the DB `ai_meta.db` and log `ai_meta.log` file are located inside the user's `$HOME` dircetory or `%userprofile%` on windows.
