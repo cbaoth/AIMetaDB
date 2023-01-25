@@ -52,7 +52,8 @@ Python 3.8+ and the following pips:
 
 Pretty basic (still a prototype):
 
-1. Scan invoke-ai png files putting their master data into the DB (insert or update based on hash code):
+=== Transfer PNG metadata into DB
+Scan invoke-ai png file metadata into the DB (insert new, update existing records, based on hash code):
 
  ./main.py --recursive "sd/output/**/*.png"
 
@@ -60,11 +61,36 @@ on windows with more verbose output:
 
  python main.py --recursive --loglevel_cl INFO "D:\sd\output\**\*.png"
 
-2. Scan one or more png files comparing them with the db file prompts:
+=== Match file prompt against DB
+* Scan one or more png files comparing them with the db file prompts:
 
- ./main.py --mode matchdb --loglevel_cl NONE --similarity_min 98 "sd/my_ref_pictures/*.png" "sd/and_another_one.png"
+ ./main.py --mode MATCHDB --similarity_min 90 --sort_matches --loglevel_cl NONE sd/000016.b6a7a640.700956471.png
 
-3. Help:
+A result for a single reference file might look like this (without colors and images):
+
+`in_file_idx | db_file_idx | **file_source** | **similarity** | steps | cfg_scale | sampler | height | width | seed | model_hash | model_weights | type | image_hash | file_name | app_id | app_version | **prompt**`
+
+`1 | 33 | **[.lime]#file#** | **[.lime]#100#** | 20 | 7 | k_euler_a | 512 | 768 | 700956471 | d0cf7cf924c6a6f42eabed6729b8d6df3ef66ba2b4c35cb3d7e2f54a5d878166 | Elldreths_Lucid_Mix | txt2img | 8fc935504ee780430ac036f9ee85c116ba38564170e2a3e2b947727f29998b0f | 000016.b6a7a640.700956471.png | invoke-ai/InvokeAI | 2.2.5 | "**[.lime]#woman in her 30s#** with dark hair, slighly messy hair and  (greasy, sweaty) skin, in the control center of a small (space ship, scifi shuttle), looking (distressed, worried), working on futuristic (computer terminals, controls), looking at the controls, screen shows hostile alien space ship, (cinematic, dramatic) lighting, red alert, photorealistic, fish eye lense, wide angle, (camera angle view from inside the monitor she is looking at)+, (same style as the movie (alien, blade runner)), (masterpiece, high quality, high details, 4k, 8k), [painting, anime, comic]"`
+
+image:./adoc_assets/000016.b6a7a640.700956471.jpg[]
+
+`1 | 35 | **[.red]#db#** | **[.lime]#100#** | 20 | 7.0 | k_euler_a | 512 | 768 | 700956471 | 61a37adf761fbbf4cb3d88da480216341113d0fbcf9f0f77ea71863866a9b6fc | Protogen_x3.4 | txt2img | 690291933af4c14707ae6358e1bcedab28162796b4f20d6543da2aba20420d01 | 000024.584281c1.700956471.png | invoke-ai/InvokeAI | 2.2.5 | "woman in her 30s with dark hair, slighly messy hair and  (greasy, sweaty) skin, in the control center of a small (space ship, scifi shuttle), looking (distressed, worried), working on futuristic (computer terminals, controls), looking at the controls, screen shows hostile alien space ship, (cinematic, dramatic) lighting, red alert, photorealistic, fish eye lense, wide angle, (camera angle view from inside the monitor she is looking at)+, (same style as the movie (alien, blade runner)), (masterpiece, high quality, high details, 4k, 8k), [painting, anime, comic]"`
+
+image:./adoc_assets/000024.584281c1.700956471.jpg[]
+
+`1 | 33 | **[.red]#db#** | **[.red]#98#** | 20 | 7.0 | k_euler_a | 512 | 768 | 442486736 | d0cf7cf924c6a6f42eabed6729b8d6df3ef66ba2b4c35cb3d7e2f54a5d878166 | Elldreths_Lucid_Mix | txt2img | d5dbcc7bd8e628d9afafecaee826d5b5dd3de91cc2e7dd3477df032f158939d3 | 000015.488762cd.442486736.png | invoke-ai/InvokeAI | 2.2.5 | "**[.red]#mid-aged#** woman with dark hair, slighly messy hair and  (greasy, sweaty) skin, in the control center of a small (space ship, scifi shuttle), looking (distressed, worried), working on futuristic (computer terminals, controls), looking at the controls, screen shows hostile alien space ship, (cinematic, dramatic) lighting, red alert, photorealistic, fish eye lense, wide angle, (camera angle view from inside the monitor she is looking at)+, (same style as the movie (alien, blade runner)), (masterpiece, high quality, high details, 4k, 8k), [painting, anime, comic]"`
+
+image:./adoc_assets/000015.488762cd.442486736.jpg[]
+
+`1 | 32 | **[.red]#db#** | **[.red]#94#** | 20 | 7.0 | k_euler_a | 512 | 768 | 2103905494 | d0cf7cf924c6a6f42eabed6729b8d6df3ef66ba2b4c35cb3d7e2f54a5d878166 | Elldreths_Lucid_Mix | txt2img | 6b580890a2f632e9a8ba73f7d97f701534d55d58859087b52dbdb21da14f3a8b | 000014.fa34dc3c.2103905494.png | invoke-ai/InvokeAI | 2.2.5 | "mid-aged woman with dark hair, **[.red]#slightly dirty#**, in the control center of a small (space ship, scifi shuttle), looking (distressed, worried), working on futuristic (computer terminals, controls), looking at the controls, screen shows hostile alien space ship, (cinematic, dramatic) lighting, red alert, photorealistic, fish eye lense, wide angle, (camera angle view from inside the monitor she is looking at)+, (same style as the movie (alien, blade runner)), (masterpiece, high quality, high details, 4k, 8k), [painting, anime, comic]"`
+
+image:./adoc_assets/000014.fa34dc3c.2103905494.jpg[]
+
+`1 | 31 | **[.red]#db#** | **[.red]#93#** | 20 | 7.0 | k_euler_a | 512 | 768 | 3986332368 | d0cf7cf924c6a6f42eabed6729b8d6df3ef66ba2b4c35cb3d7e2f54a5d878166 | Elldreths_Lucid_Mix | txt2img | 09a62c12ca339cda173a41b904b2643ab090f13af59e612a8cc1532a6f5230cd | 000013.b5b732ca.3986332368.png | invoke-ai/InvokeAI | 2.2.5 | "**[.yellow]#woman in the#** control center of a small (space ship, scifi shuttle), looking (distressed, worried), working on futuristic (computer terminals, controls), looking at the controls, screen shows hostile alien space ship, (cinematic, dramatic) lighting, red alert, photorealistic, fish eye lense, wide angle, (camera angle view from inside the monitor she is looking at)+, (same style as the movie (alien, blade runner)), (masterpiece, high quality, high details, 4k, 8k), [painting, anime, comic]"`
+
+image:./adoc_assets/000013.b5b732ca.3986332368.jpg[]
+
+=== Help:
 
  python main.py --help
 
