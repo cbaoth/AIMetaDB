@@ -306,6 +306,9 @@ def db_match(path, png, image_hash, idx, sort=False):
         row_meta['prompt'] = sanitize_prompt(row_meta['prompt'])
         #print("-----> %s\n-----> %s" % (row_meta['prompt'], file_meta['prompt']))
         similarity = fuzz.token_sort_ratio(row_meta['prompt'], file_meta['prompt'])
+        if (file_meta['image_hash'] == row_meta['image_hash']):
+            log.debug("skipping db meta with same image_hash as given file")
+            continue
         if (similarity >= args.similarity_min):
             if (not file_printed):  # print current file in first iteration (not at all if no matches were found)
                 file_printed = True
