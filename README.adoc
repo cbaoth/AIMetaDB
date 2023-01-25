@@ -11,9 +11,12 @@ v0.1, 2023-01-24
 == Summary
 THIS IS JUST A PROTOTYPE FOR NOW!
 
-FOR NOW I'LL NOT ENSURE BACKWARD COMPATIBILITY BETWEEN VERSION, ESPECIALLY REGARDING THE DB!
+* HACKY PROTOTYPE CODE!
+* NO TESTS YET!
+* NO GUARANTEES REGARDING BACKWARD COMPATIBILITY (DB, OUTPUT FORMAT, ARGUMENTS, ETC.)!
+* ...
 
-=== Why do this?
+=== What's the idea behind this?
 Latest after creating AI images using my https://github.com/cbaoth/userscripts#invoke-ai-tweaks[invoke-ai-tweaks] userscript or other "mass production randomness madness" I have a pretty big mess of images with random prompts, samplers, sizes, etc. that are hard to sort/group and its hard to find out which settings and prompts work more than others.
 
 Main goals, means to ..
@@ -29,14 +32,13 @@ Main goals, means to ..
 * **Store this metadata in a Sqlite DB**
 ** *Includes the current file name (may change) and a sha256 hash of the image data only (no metadata). I don't want actual image hashes (similarity) but a has for a given file to identify it again later on. It has to be seen if this approch is stable or not.*
 ** All metadat is additionally stored as a json for future processing of properties that are yet unknown to the app or not specifically collected (field based, into DB columns).
-* **Find similarities between prompt texts from the DB and those of provided reference images.**
-** *Currently just a simple Levenshtein Distance metric (0 to 100).*
+* **Find similarities between prompt texts from the DB vs. those of provided reference images (result grouped by input files).**
+** *Currently just a simple Levenshtein Distance metric (0 to 100) for the prompt.*
 
-=== What I want it to do
-* Identify similarities between multiple image prompts, e.g. after organizing/rating them, which prompts work and which don't (to achive the best goals)
-* Organize/rename image files based on their similarities, e.g. group images with similar prompts
-
-=== What
+=== Some ideas (not yet implemented)
+* Match given files only (no comparison vs. db)
+* Organize/rename those files e.g. grouping them in folders by their prompt similarity (nice for bulk created random prompt images)
+* Alternative formated (e.g. HTML) output allowing things like general formating, diff visualization, colors, images/thumbnails (local ref / thumbnails stored in DB)
 
 == Requirements
 
