@@ -209,11 +209,11 @@ def a1111_meta_to_dict_to_json(params):
             s = params
     else:
         raise InvalidMeta("Unable to process presumed A1111 meta: %s" % params)
-    try:
-        result = dict(map(lambda e: [e[0].lower().replace(' ', '_'), e[1]], re.findall(r'[, ]*([^:]+): ([^,]+)?', s)))
-    except BaseException as e:
-        log.error("Unable to process presumed A1111 meta: %s" % params)
-        raise InvalidMeta(str(e))
+    #try:
+    result = dict(map(lambda e: [e[0].lower().replace(' ', '_'), e[1]], re.findall(r'[, ]*([^:]+): ([^,]+)?', s)))
+    #except BaseException as e:
+    #    log.error("Unable to process presumed A1111 meta: %s" % params)
+    #    raise InvalidMeta(str(e))
     result['prompt'] = p
     [result['width'], result['height']] = result['size'].split('x')
     result['app_id'] = 'AUTOMATIC1111/stable-diffusion-webui'
@@ -237,13 +237,10 @@ def get_meta(path, png, image_hash):
         elif ('parameters' in meta_dict):   # a1111
             sd_meta = a1111_meta_to_dict_to_json(meta_dict['parameters'])
         else:
-            log.warning("no known meta found in [file_path: %s]" % path)
-            raise InvalidMeta(e)
+            raise InvalidMeta("No known meta found in [file_path: \"%s\"]" % path)
     except KeyError as e:
         log.warning("no known meta found in [file_path: %s]" % path)
         raise InvalidMeta(e)
-    except InvalidMeta as e:
-        raise e  # propagate
     meta_json = json.dumps(meta_dict)
     if sd_meta[META_TYPE_KEY] == MetaType.INVOKEAI.value:
         result = {"meta_type": sd_meta[META_TYPE_KEY],
@@ -317,6 +314,7 @@ def db_insert_meta(path, png, image_hash):
         cur.execute(sql_insert_meta, meta_values)
         conn.commit()
     except InvalidMeta as e:
+        log.warning("Unable to read meta from [file_path: \"%s\"], skipping .." % path)
         log.debug(e)
         return;
     except sqlite3.IntegrityError:
@@ -350,6 +348,8 @@ def db_update_meta(path, png, image_hash):
         cur.execute(sql_update_meta, meta_values)
         conn.commit()
     except InvalidMeta as e:
+        log.warning("Unable to read meta from [file_path: \"%s\"], skipping .." % path)
+        log.debug(e)
         return;
     except Error as e:
         log.error("failed to update existing meta in db, transaction rollback:\n" % e)
@@ -398,7 +398,12 @@ def meta_to_output_tuple(dict):
 def db_match(path, png, image_hash, idx, sort=False):
     result = []
     print_pattern = "%s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | \"%s\" | \"%s\""
-    file_meta = get_meta(path, png, image_hash)
+    try:
+        file_meta = get_meta(path, png, image_hash)
+    except InvalidMeta as e:
+        log.warning("Unable to read meta from [file_path: \"%s\"], skipping .." % path)
+        log.debug(e)
+        return
     file_meta['prompt'] = sanitize_prompt(file_meta['prompt'])
     sql_select = """SELECT steps, cfg_scale, sampler, height, width, seed, model_hash, model_weights,
                            meta_type, type, image_hash, file_name, file_ctime, file_mtime, app_id, app_version, prompt FROM meta;"""
@@ -442,7 +447,12 @@ def db_match(path, png, image_hash, idx, sort=False):
 
 def rename_file(file_path, png, image_hash):
     # FIXME split path an fname, currently filename must be first (path is included)
-    meta = get_meta(file_path, png, image_hash)
+    try:
+        meta = get_meta(file_path, png, image_hash)
+    except InvalidMeta as e:
+        log.warning("Unable to read meta from [file_path: \"%s\"], skipping .." % file_path)
+        log.debug(e)
+        return
     path = os.path.split(file_path)[0]
     [meta['file_name_noext'], meta['file_ext']] = os.path.splitext(meta['file_name'])
     meta['model_hash_short'] = meta['model_hash'][0:10]
@@ -484,7 +494,12 @@ def process_file(file_path, idx):
         log.warning("IO error while reading file, skipping: %s" % file_path)
         log.debug(str(e))
         return
-    image_hash = file_hash(file_path)
+    try:
+        image_hash = file_hash(file_path)
+    except OSError as e:
+        log.warning("I/O error while calculate image hash for file [\"%s\"], skipping ...")
+        log.debug(e)
+        return
     if (mode == Mode.UPDATEDB):
         db_update_or_create_meta(file_path, png, image_hash)
     elif (mode == Mode.MATCHDB):
