@@ -4,7 +4,7 @@
 # pip install pillow
 # https://pillow.readthedocs.io/en/stable/reference
 # https://pypi.org/project/ImageHash/
-# pip install thefuzz[speedup]
+# pip install "thefuzz[speedup]"
 # https://github.com/seatgeek/thefuzz
 # https://github.com/AUTOMATIC1111/stable-diffusion-webui-tokenizer
 
@@ -50,8 +50,10 @@ mode = Mode.MATCHDB
 
 pp = PrettyPrinter(4, 120)
 
-class IvalidMeta(Exception):
-    '''raise this when there's an error reading or processing meta data'''
+
+# raised when there's an error reading or processing meta data
+class InvalidMeta(Exception):
+    pass
 
 
 # parse and return command line arguments
@@ -198,8 +200,20 @@ def file_hash(path):
 
 def a1111_meta_to_dict_to_json(params):
     #[p, s] = re.split(r'\n(Steps: )', params)   # FIXME comple all regex globally
-    [p, s] = params.rsplit('\n', 1)
-    result = dict(map(lambda e: [e[0].lower().replace(' ', '_'), e[1]], re.findall(r'[, ]*([^:]+): ([^,]+)?', s)))
+    #try:
+    if ('Steps: ' in params):
+        if ('\n' in params):
+            [p, s] = params.rsplit('\n', 1)
+        else:
+            p = ""
+            s = params
+    else:
+        raise InvalidMeta("Unable to process presumed A1111 meta: %s" % params)
+    try:
+        result = dict(map(lambda e: [e[0].lower().replace(' ', '_'), e[1]], re.findall(r'[, ]*([^:]+): ([^,]+)?', s)))
+    except BaseException as e:
+        log.error("Unable to process presumed A1111 meta: %s" % params)
+        raise InvalidMeta(str(e))
     result['prompt'] = p
     [result['width'], result['height']] = result['size'].split('x')
     result['app_id'] = 'AUTOMATIC1111/stable-diffusion-webui'
@@ -224,10 +238,12 @@ def get_meta(path, png, image_hash):
             sd_meta = a1111_meta_to_dict_to_json(meta_dict['parameters'])
         else:
             log.warning("no known meta found in [file_path: %s]" % path)
-            raise IvalidMeta(e)
+            raise InvalidMeta(e)
     except KeyError as e:
         log.warning("no known meta found in [file_path: %s]" % path)
-        raise IvalidMeta(e)
+        raise InvalidMeta(e)
+    except InvalidMeta as e:
+        raise e  # propagate
     meta_json = json.dumps(meta_dict)
     if sd_meta[META_TYPE_KEY] == MetaType.INVOKEAI.value:
         result = {"meta_type": sd_meta[META_TYPE_KEY],
@@ -300,7 +316,8 @@ def db_insert_meta(path, png, image_hash):
         log.debug("db INSERT into meta: %s" % str(meta_values))
         cur.execute(sql_insert_meta, meta_values)
         conn.commit()
-    except IvalidMeta as e:
+    except InvalidMeta as e:
+        log.debug(e)
         return;
     except sqlite3.IntegrityError:
         res = cur.execute("SELECT file_name FROM meta WHERE image_hash = ?", (image_hash,))
@@ -332,7 +349,7 @@ def db_update_meta(path, png, image_hash):
         log.debug("db UPDATE into meta: %s" % str(meta_values))
         cur.execute(sql_update_meta, meta_values)
         conn.commit()
-    except IvalidMeta as e:
+    except InvalidMeta as e:
         return;
     except Error as e:
         log.error("failed to update existing meta in db, transaction rollback:\n" % e)
