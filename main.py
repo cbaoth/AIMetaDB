@@ -9,6 +9,7 @@
 # https://github.com/AUTOMATIC1111/stable-diffusion-webui-tokenizer
 
 import argparse
+from datetime import datetime
 from pathlib import Path
 #from typing import Iterable
 from glob import glob
@@ -22,24 +23,35 @@ import hashlib
 import time
 import re
 from thefuzz import fuzz, process
-#from pprint import PrettyPrinter
+from pprint import PrettyPrinter
 #import imagehash
 from enum import Enum
 
+DEFAULT_FNAME_PATTERN = '{file_ctime_iso}_{model_hash_short}-{seed}-{image_hash_short}_[{cfg_scale}@{steps}, {sampler}]'
 DEFAULT_DB_FILE = str(Path.home()) + '/ai_meta.db'
 DEFAULT_LOG_FILE = str(Path.home()) + '/ai_meta.log'
 DEFAULT_LOGLEVEL_FILE = 'INFO'
-DEFAULT_LOGLEVEL_CL = 'ERROR'
+DEFAULT_LOGLEVEL_CL = 'WARNING'
 
 class Mode(Enum):
     UPDATEDB = 1
     MATCHDB = 2
+    RENAME = 3
+
+META_TYPE_KEY = 'meta_type'
+class MetaType(Enum):
+    INVOKEAI = 1
+    A1111 = 2
 
 log = logging
 args = None
 conn = None
 mode = Mode.MATCHDB
 
+pp = PrettyPrinter(4, 120)
+
+class IvalidMeta(Exception):
+    '''raise this when there's an error reading or processing meta data'''
 
 
 # parse and return command line arguments
@@ -48,12 +60,16 @@ def args_init():
     parser.add_argument('infile', type=Path, nargs='+',
                         help='One or more file names, directories, or glob patterns')
     parser.add_argument('--mode', type=str, default='UPDATEDB',
-                        choices=['UPDATEDB', 'MATCHDB'],
-                        help='Processing mode [updatedb: add file meta to db, matchdb: match file meta with db')
+                        choices=['UPDATEDB', 'MATCHDB', 'RENAME'],
+                        help='Processing mode [UPDATEDB: add file meta to db, MATCHDB: match file meta with db, RENAME: reame files by metadata')
     parser.add_argument('--similarity_min', type=int, default=0,
                         help='Filter matchdb mode results based on similarity >= X [default: 0]')
     parser.add_argument('--sort_matches', action='store_true',
                         help='Sort results by similartiy (desc) grouped by infile (WARNING: memory heavy when processing large result sets)')
+    parser.add_argument('--fname_pattern', type=str, default=DEFAULT_FNAME_PATTERN,
+                        help='File renaming pattern for RENAME mode [default: %s]' % DEFAULT_FNAME_PATTERN)  # todo document available fields
+    parser.add_argument('--no-act', action='store_true',
+                        help='Only print what would be done without changing anything (mode = RENAME only)')
     parser.add_argument('--recursive', action='store_true',
                         help='Process directories and ** glob patterns recursively')
     parser.add_argument('--dbfile', type=str, default=DEFAULT_DB_FILE,
@@ -114,6 +130,7 @@ def db_init(dbfile):
     sql_create_meta_table = """CREATE TABLE IF NOT EXISTS meta (
                                 id integer PRIMARY KEY,
                                 image_hash text NOT NULL UNIQUE,
+                                meta_type int,
                                 file_name text,
                                 app_id text,
                                 app_version text,
@@ -128,6 +145,8 @@ def db_init(dbfile):
                                 width integer,
                                 seed integer,
                                 png_info text,
+                                file_ctime date,
+                                file_mtime date,
                                 created_at date DEFAULT(DATETIME('now'))
                             ); """
 
@@ -143,6 +162,14 @@ def db_init(dbfile):
         cur = conn.cursor()
         #cur.execute(f"PRAGMA foreign_keys = ON;")
         log.debug("ensuring db table [meta] exists.")
+
+        # migrate
+        #cur.execute('alter table meta add column meta_type integer')
+        #cur.execute('alter table meta add column file_ctime date')
+        #cur.execute('alter table meta add column file_mtime date')
+        #cur.execute('update meta set meta_type = 1')
+        #conn.commit()
+
         cur.execute(sql_create_meta_table);
         #log.info("ensuring db table exists: json")
         #cur.execute(sql_create_meta_json_table);
@@ -169,28 +196,81 @@ def file_hash(path):
     return sha256.hexdigest()
 
 
-def get_meta_db_values(path, png, image_hash):
+def a1111_meta_to_dict_to_json(params):
+    #[p, s] = re.split(r'\n(Steps: )', params)   # FIXME comple all regex globally
+    [p, s] = params.rsplit('\n', 1)
+    result = dict(map(lambda e: [e[0].lower().replace(' ', '_'), e[1]], re.findall(r'[, ]*([^:]+): ([^,]+)?', s)))
+    result['prompt'] = p
+    [result['width'], result['height']] = result['size'].split('x')
+    result['app_id'] = 'AUTOMATIC1111/stable-diffusion-webui'
+    result['app_version'] = None # info not provided
+    result['type'] = None  # info not provided (t2i/i2i)
+    result['model_weights'] = None  # info not provided (weights name), TODO consider mapping
+    result[META_TYPE_KEY] = MetaType.A1111.value
+    return result
+    #nSteps: 20, Sampler: Euler a, CFG scale: 8.5, Seed: 2518596816, Size: 512x768, Model hash: 7dd744682a'
+
+
+def get_meta(path, png, image_hash):
     file_name = os.path.basename(path)
-    meta_dict = png.info
-    sd_meta = json.loads(meta_dict['sd-metadata'])
-    # sd-metadata is a json-string, not a dict, so let's convert it to one
-    meta_dict['sd-metadata'] = sd_meta
+    try:
+        meta_dict = png.info
+        if ('sd-metadata' in meta_dict):  # invoke-ai
+            # parse sd-metadata (json) string to dict
+            sd_meta = json.loads(meta_dict['sd-metadata'])
+            sd_meta[META_TYPE_KEY] = MetaType.INVOKEAI.value
+            meta_dict['sd-metadata'] = sd_meta  # overwrite json-string with dict
+        elif ('parameters' in meta_dict):   # a1111
+            sd_meta = a1111_meta_to_dict_to_json(meta_dict['parameters'])
+        else:
+            log.warning("no known meta found in [file_path: %s]" % path)
+            raise IvalidMeta(e)
+    except KeyError as e:
+        log.warning("no known meta found in [file_path: %s]" % path)
+        raise IvalidMeta(e)
     meta_json = json.dumps(meta_dict)
-    return {"file_name": file_name,
-            "app_id": sd_meta['app_id'],
-            "app_version": sd_meta['app_version'],
-            "model_weights": sd_meta['model_weights'],
-            "model_hash": sd_meta['model_hash'],
-            "type": sd_meta['image']['type'],
-            "prompt": sd_meta['image']['prompt'][0]['prompt'],
-            "steps": sd_meta['image']['steps'],
-            "cfg_scale": sd_meta['image']['cfg_scale'],
-            "sampler": sd_meta['image']['sampler'],
-            "height": sd_meta['image']['height'],
-            "width": sd_meta['image']['width'],
-            "seed": sd_meta['image']['seed'],
-            "png_info": meta_json,
-            "image_hash": image_hash}
+    if sd_meta[META_TYPE_KEY] == MetaType.INVOKEAI.value:
+        result = {"meta_type": sd_meta[META_TYPE_KEY],
+                  "file_name": file_name,
+                  "app_id": sd_meta['app_id'],
+                  "app_version": sd_meta['app_version'],
+                  "model_weights": sd_meta['model_weights'],
+                  "model_hash": sd_meta['model_hash'],
+                  "type": sd_meta['image']['type'],
+                  "prompt": sd_meta['image']['prompt'][0]['prompt'],
+                  "steps": sd_meta['image']['steps'],
+                  "cfg_scale": sd_meta['image']['cfg_scale'],
+                  "sampler": sd_meta['image']['sampler'],
+                  "height": sd_meta['image']['height'],
+                  "width": sd_meta['image']['width'],
+                  "seed": sd_meta['image']['seed'],
+                  "png_info": meta_json,
+                  "image_hash": image_hash,
+                  "file_ctime_iso": timestamp_to_iso(os.path.getctime(path)),
+                  "file_mtime_iso": timestamp_to_iso(os.path.getmtime(path))}
+    else:  # A1111
+        result = {"meta_type": sd_meta[META_TYPE_KEY],
+                  "file_name": file_name,
+                  "app_id": sd_meta['app_id'],
+                  "app_version": sd_meta['app_version'],
+                  "model_weights": sd_meta['model_weights'],
+                  "model_hash": sd_meta['model_hash'],
+                  "type": sd_meta['type'],
+                  "prompt": sd_meta['prompt'],
+                  "steps": sd_meta['steps'],
+                  "cfg_scale": sd_meta['cfg_scale'],
+                  "sampler": sd_meta['sampler'],
+                  "height": sd_meta['height'],
+                  "width": sd_meta['width'],
+                  "seed": sd_meta['seed'],
+                  "png_info": meta_json,
+                  "image_hash": image_hash,
+                  "file_ctime": os.path.getctime(path),
+                  "file_mtime": os.path.getmtime(path),
+                  "file_ctime_iso": timestamp_to_iso(os.path.getctime(path)),
+                  "file_mtime_iso": timestamp_to_iso(os.path.getmtime(path))}
+    log.debug('meta data extracted: %s' % pp.pformat(result))
+    return result
 
 
 def db_get_meta_file_name_by_hash(image_hash):
@@ -204,24 +284,24 @@ def db_get_meta_file_name_by_hash(image_hash):
 def db_insert_meta(path, png, image_hash):
     file_name = os.path.basename(path)
     log.info("inserting meta in db for [image_hash: %s, path: \"%s\"" % (image_hash, str(path)))
-    sql_insert_meta = """INSERT INTO meta (file_name, app_id, app_version,
+    sql_insert_meta = """INSERT INTO meta (meta_type, file_name, app_id, app_version,
                                            model_weights, model_hash, type, prompt,
                                            steps, cfg_scale, sampler,
                                            height, width, seed, png_info,
-                                           image_hash)
-                         VALUES (:file_name, :app_id, :app_version,
+                                           image_hash, file_ctime, file_mtime)
+                         VALUES (:meta_type, :file_name, :app_id, :app_version,
                                  :model_weights, :model_hash, :type, :prompt,
                                  :steps, :cfg_scale, :sampler,
                                  :height, :width, :seed, :png_info,
-                                 :image_hash);"""
+                                 :image_hash, :file_ctime, :file_mtime);"""
     try:
         cur = conn.cursor()
-        meta_values = get_meta_db_values(path, png, image_hash);
+        meta_values = get_meta(path, png, image_hash);
         log.debug("db INSERT into meta: %s" % str(meta_values))
         cur.execute(sql_insert_meta, meta_values)
         conn.commit()
-    except KeyError as e:
-        log.warning("skipping corrupted or non-invoke-ai [file_path: %s]" % path)
+    except IvalidMeta as e:
+        return;
     except sqlite3.IntegrityError:
         res = cur.execute("SELECT file_name FROM meta WHERE image_hash = ?", (image_hash,))
         # todo: compare file names
@@ -233,26 +313,27 @@ def db_insert_meta(path, png, image_hash):
         log.debug("failed to insert duplicate png into db, existing record: %s" % str(dict((row))))
         conn.rollback()
     except Error as e:
-        log.error("failed to insert new meta into db, transaction rollback:\n" % e)
+        log.error("failed to insert new meta into db, transaction rollback: %s\n" % e)
         conn.rollback()
 
 
 def db_update_meta(path, png, image_hash):
     log.info("updating meta in db for [image_hash: %s, path: \"%s\"" % (image_hash, str(path)))
     sql_update_meta = """UPDATE meta
-                         SET file_name = :file_name, app_id = :app_id, app_version = :app_version,
+                         SET meta_type = :meta_type, file_name = :file_name, app_id = :app_id, app_version = :app_version,
                              model_weights = :model_weights, model_hash = :model_hash, type = :type, prompt = :prompt,
                              steps = :steps, cfg_scale = :cfg_scale, sampler = :sampler,
-                             height = :height, width = :width, seed = :seed, png_info = :png_info
+                             height = :height, width = :width, seed = :seed, png_info = :png_info,
+                             file_ctime = file_ctime, file_mtime = file_mtime
                          WHERE image_hash = :image_hash;"""
     try:
         cur = conn.cursor()
-        meta_values = get_meta_db_values(path, png, image_hash);
+        meta_values = get_meta(path, png, image_hash);
         log.debug("db UPDATE into meta: %s" % str(meta_values))
         cur.execute(sql_update_meta, meta_values)
         conn.commit()
-    except KeyError as e:
-        log.warning("skipping corrupted or non-invoke-ai [file_path: %s]" % path)
+    except IvalidMeta as e:
+        return;
     except Error as e:
         log.error("failed to update existing meta in db, transaction rollback:\n" % e)
         conn.rollback()
@@ -270,7 +351,8 @@ def db_update_or_create_meta(path, png, image_hash):
 
 
 def print_column_headrs():
-    print('in_file_idx | db_file_idx | file_source | similarity | steps | cfg_scale | sampler | height | width | seed | model_hash | model_weights | type | image_hash | file_name | app_id | app_version | prompt')
+    # TODO support custom pattern
+    print('in_file_idx | db_file_idx | file_source | similarity | steps | cfg_scale | sampler | height | width | seed | model_hash | model_weights | meta_type | type | image_hash | file_name | file_ctime | file_mtime | app_id | app_version | prompt')
 
 
 def sanitize_prompt(prompt):
@@ -279,21 +361,30 @@ def sanitize_prompt(prompt):
     return re.sub(r'\r?\n', r' ', re.sub(r'(["\\])', r'\\\1', prompt).strip())
 
 
+def timestamp_to_iso(ts):
+    #try:
+    return datetime.fromtimestamp(ts).isoformat()
+    #except:
+    #    log.debug("Unable to convert timestamp [ts=%s] to iso datetime." % ts)
+    #    return ""
+
 # convert meta dict to output tuple
 def meta_to_output_tuple(dict):
+    # TODO support custom patterns
     prompt_esc = re.sub(r'\r?\n', r' ', re.sub(r'(["\\])', r'\\\1', dict['prompt']).strip())
     return (dict['steps'], dict['cfg_scale'], dict['sampler'], dict['height'], dict['width'], dict['seed'],
-            dict['model_hash'], dict['model_weights'], dict['type'], dict['image_hash'], dict['file_name'],
+            dict['model_hash'], dict['model_weights'], dict[META_TYPE_KEY], dict['type'], dict['image_hash'],
+            dict['file_ctime_iso'], dict['file_mtime_iso'], dict['file_name'],
             dict['app_id'], dict['app_version'], sanitize_prompt(prompt_esc))
 
 
 def db_match(path, png, image_hash, idx, sort=False):
     result = []
-    print_pattern = "%s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | \"%s\""
-    file_meta = get_meta_db_values(path, png, image_hash)
+    print_pattern = "%s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | \"%s\" | \"%s\""
+    file_meta = get_meta(path, png, image_hash)
     file_meta['prompt'] = sanitize_prompt(file_meta['prompt'])
     sql_select = """SELECT steps, cfg_scale, sampler, height, width, seed, model_hash, model_weights,
-                           type, image_hash, file_name, app_id, app_version, prompt FROM meta;"""
+                           meta_type, type, image_hash, file_name, file_ctime, file_mtime, app_id, app_version, prompt FROM meta;"""
     cur = conn.cursor()
     cur.execute(sql_select)
     result_set = cur.fetchall()
@@ -304,6 +395,8 @@ def db_match(path, png, image_hash, idx, sort=False):
     for row in result_set:
         row_meta = dict(row)
         row_meta['prompt'] = sanitize_prompt(row_meta['prompt'])
+        row_meta['file_ctime_iso'] = timestamp_to_iso(row_meta['file_ctime'])
+        row_meta['file_mtime_iso'] = timestamp_to_iso(row_meta['file_mtime'])
         #print("-----> %s\n-----> %s" % (row_meta['prompt'], file_meta['prompt']))
         similarity = fuzz.token_sort_ratio(row_meta['prompt'], file_meta['prompt'])
         if (file_meta['image_hash'] == row_meta['image_hash']):
@@ -312,6 +405,7 @@ def db_match(path, png, image_hash, idx, sort=False):
         if (similarity >= args.similarity_min):
             if (not file_printed):  # print current file in first iteration (not at all if no matches were found)
                 file_printed = True
+                print(file_meta)
                 t = (idx, i, 'file', 100) + meta_to_output_tuple(file_meta)
                 if (sort):
                     result.append(t)
@@ -329,23 +423,61 @@ def db_match(path, png, image_hash, idx, sort=False):
             print(print_pattern % r)
 
 
+def rename_file(file_path, png, image_hash):
+    # FIXME split path an fname, currently filename must be first (path is included)
+    meta = get_meta(file_path, png, image_hash)
+    path = os.path.split(file_path)[0]
+    [meta['file_name_noext'], meta['file_ext']] = os.path.splitext(meta['file_name'])
+    meta['model_hash_short'] = meta['model_hash'][0:10]
+    meta['image_hash_short'] = meta['image_hash'][0:10]
+    meta['file_ctime_iso'] = meta['file_ctime_iso'].replace(':', '') # strip specials
+    meta['file_mtime_iso'] = meta['file_mtime_iso'].replace(':', '') # strip specials
+    out_file_name = args.fname_pattern.format(**meta) + meta['file_ext']
+    out_file_name_sanitized = re.sub(r'[^,.;\[\]{}&%#@+\w-]', '_', out_file_name)
+    out_path = os.path.normpath(os.path.join(path, out_file_name_sanitized))
+    if (os.path.normpath(file_path) == out_path):
+        log.warning("Outfile identical to infile name [%s], skipping ..." % out_path)
+    elif (Path(out_path).exists()):
+        log.warning("File with same name exists [%s], skipping ..." % out_path)
+        # TODO add --force-overwirte option
+    elif (args.no_act):
+        msg = "Would rename: [\"%s\"] -> [\"%s\"]" % (file_path, out_path)
+        log.info(msg)
+        print(msg)
+    else:
+        msg = "Renaming: [\"%s\"] -> [\"%s\"]" % (file_path, out_path)
+        log.info(msg)
+        print(msg)
+        os.rename(file_path, out_path)
+
 
 def process_file(file_path, idx):
     try:
         png = Image.open(str(file_path))
         png.load() # needed to get for .png EXIF data
-    except UnidentifiedImageError:
-        log.warning("Not a valid image file, skipping: %s" % file_path)
-        return
-    except (AttributeError, IsADirectoryError):  # directory or other type?
+    except (AttributeError, IsADirectoryError) as e:  # directory or other type?
         log.warning("Not a file, skipping: %s" % file_path)
+        log.debug(str(e))
+        return
+    except UnidentifiedImageError as e:
+        log.warning("Not a valid image file, skipping: %s" % file_path)
+        log.debug(str(e))
+        return
+    except OSError as e:
+        log.warning("IO error while reading file, skipping: %s" % file_path)
+        log.debug(str(e))
         return
     image_hash = file_hash(file_path)
     if (mode == Mode.UPDATEDB):
         db_update_or_create_meta(file_path, png, image_hash)
-    else:  # Mode.MATCHDB
+    elif (mode == Mode.MATCHDB):
         print_column_headrs()
         db_match(file_path, png, image_hash, idx, args.sort_matches)
+    elif (mode == Mode.RENAME):
+        rename_file(file_path, png, image_hash)
+    else:  # should never happen
+        log.error("Unknown mode: %s" % mode)
+        sys.exit(1)
 
 
 def process_paths():
@@ -358,7 +490,9 @@ def process_paths():
         # single file or glob expansion
         # FIXME currently can't handle "./" recursion (maybe others too)
         file_paths = [f] if (f.exists() and f.is_file()) else [Path(p) for p in glob(str(f.expanduser()), recursive=args.recursive)]
-
+        if (len(file_paths) <= 0):
+            log.warning("no file(s) found for infile pattern [\"%s\"], skipping ..." % f)
+            continue
         for file_path in file_paths:
             start_time_file = time.time()
             log.info("processing [#%s, file: \"%s\"] ..." % (idx, file_path))

@@ -17,27 +17,33 @@ THIS IS JUST A PROTOTYPE FOR NOW!
 * ...
 
 === What's the idea behind this?
-Latest after creating AI images using my https://github.com/cbaoth/userscripts#invoke-ai-tweaks[invoke-ai-tweaks] userscript or other "mass production randomness madness" I have a pretty big mess of images with random prompts, samplers, sizes, etc. that are hard to sort/group and its hard to find out which settings and prompts work more than others.
+Latest after creating AI images using my https://github.com/cbaoth/userscripts#invoke-ai-tweaks[invoke-ai-tweaks] userscript or other "mass production randomness madness" in https://github.com/invoke-ai/InvokeAI[InvokeAI] and https://github.com/AUTOMATIC1111/stable-diffusion-webui[Automatic1111], I got a pretty big mess of images with random prompts, samplers, sizes, etc. that are hard to sort/group plus I have no convenient way finding out which prompts and settings have the highest impact on good results.
 
 Main goals, means to ..
-* .. create a DB with all my Invoke-AI PNG files (image hash based).
-* .. find, group, etc. images based on metadata like promt content.
-* .. find, group, etc. images based on metadata similarities (e.g. similar prompts)
-** To find most promising settings (see what works and what doesn't).
+
+* .. read png AI engine metadata from files *&rarr; Done*
+* .. rename files based on meta data like model_weihts, sampler, seed, file creation date, etc. *&rarr; Done*
+* .. create a DB (cache) of existing files to make matching new files against existing ones more efficient *&rarr; Done*
+* .. identify image similarities based on their metadata (e.g. similar prompts) *&rarr; Partially done*
+** To identify most promissing settings _(see what works and what doesn't)_
 ** To manually identify differences that mostly impact the result/style of images that have atherwise similar settings/prompts.
+* .. output metadata and similarities in basic CSV format *&rarr; Done*
+* .. output metadata and similarities in in (colorful/formated) diff mode (e.g. HTML)
+* .. group images into folders based on metadata
 
 === What it does already
-* **Read all metadata from https://github.com/invoke-ai/InvokeAI[InvokeAI] PNG files**
-** *Metadata of other engines is not supported (yet), files with missing metadata will just be ignored.*
-* **Store this metadata in a Sqlite DB**
-** *Includes the current file name (may change) and a sha256 hash of the image data only (no metadata). I don't want actual image hashes (similarity) but a has for a given file to identify it again later on. It has to be seen if this approch is stable or not.*
-** All metadat is additionally stored as a json for future processing of properties that are yet unknown to the app or not specifically collected (field based, into DB columns).
-* **Find similarities between prompt texts from the DB vs. those of provided reference images (result grouped by input files).**
-** *Currently just a simple Levenshtein Distance metric (0 to 100) for the prompt.*
+* Read most metadata from https://github.com/invoke-ai/InvokeAI[InvokeAI] and https://github.com/AUTOMATIC1111/stable-diffusion-webui[Automatic1111] PNG files _(files with missing details are skipped)_
+** _Icluduse additional information like AI engine, unique image data hash code, etc._
+* Store, upate, read this metadata in/from a SQLite DB
+* Rename wiles baesd on this metadata (custom pattern and dry-run support). _Example:_
+** Pattern: `{file_ctime_iso}_{model_hash_short}-{seed}-{image_hash_short}_[{cfg_scale}@{steps}, {sampler}]`
+** Renames: `/mnt/i/sd/Output/Photo/Stock/001313.019f7f7b.2956399993.png` &rarr; `/mnt/i/sd/Output/Photo/Stock/2023-01-16T14:06:16.602398_d8691b4d16-2956399993-5a854aa551_[7.5@20, k_euler_a].png`
+* Find similarities between prompt texts from the DB vs. those of provided reference images _(result grouped by input files)_.
+** _Currently just a simple Levenshtein Distance metric (0 to 100) for the prompt._
 
 === Some ideas (not yet implemented)
-* Match given files only (no comparison vs. db)
-* Organize/rename those files e.g. grouping them in folders by their prompt similarity (nice for bulk created random prompt images)
+* Directly match arg files w/o using the cache db
+* Organize files into folders based on metadat
 * Alternative formated (e.g. HTML) output allowing things like general formating, diff visualization, colors, images/thumbnails (local ref / thumbnails stored in DB)
 
 == Requirements
