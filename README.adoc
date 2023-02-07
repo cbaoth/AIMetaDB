@@ -34,12 +34,15 @@ Main goals, means to ..
 === What it does already
 * Read most metadata from https://github.com/invoke-ai/InvokeAI[InvokeAI] and https://github.com/AUTOMATIC1111/stable-diffusion-webui[Automatic1111] PNG files _(files with missing details are skipped)_
 ** _Icluduse additional information like AI engine, unique image data hash code, etc._
-* Store, upate, read this metadata in/from a SQLite DB
-* Rename wiles baesd on this metadata (custom pattern and dry-run support). _Example:_
+* `--mode UPDATEDB`: Store, upate, read this metadata in/from a SQLite DB
+* `--mode RENAME`: Rename wiles baesd on this metadata (custom pattern and dry-run support). _Example:_
 ** Pattern: `{file_ctime_iso}_{model_hash_short}-{seed}-{image_hash_short}_[{cfg_scale}@{steps}, {sampler}]`
 ** Renames: `/mnt/i/sd/Output/Photo/Stock/001313.019f7f7b.2956399993.png` &rarr; `/mnt/i/sd/Output/Photo/Stock/2023-01-16T14:06:16.602398_d8691b4d16-2956399993-5a854aa551_[7.5@20, k_euler_a].png`
-* Find similarities between prompt texts from the DB vs. those of provided reference images _(result grouped by input files)_.
+* `--mode MATCHDB`: Find similarities between prompt texts from the DB vs. those of provided reference images _(result grouped by input files)_.
 ** _Currently just a simple Levenshtein Distance metric (0 to 100) for the prompt._
+* `--mode TOJSON`: Print metadata of one or more files as json.
+** Example: `./main.py --mode TOJSON ai_image.png | jq .prompt` -> Get prompt only
+* `--mode TOCSV`: Print metadata of one or more files as csv.
 
 === Some ideas (not yet implemented)
 * Directly match arg files w/o using the cache db

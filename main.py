@@ -37,6 +37,8 @@ class Mode(Enum):
     UPDATEDB = 1
     MATCHDB = 2
     RENAME = 3
+    TOJSON = 4
+    TOCSV = 5
 
 META_TYPE_KEY = 'meta_type'
 class MetaType(Enum):
@@ -62,7 +64,7 @@ def args_init():
     parser.add_argument('infile', type=Path, nargs='+',
                         help='One or more file names, directories, or glob patterns')
     parser.add_argument('--mode', type=str, default='UPDATEDB',
-                        choices=['UPDATEDB', 'MATCHDB', 'RENAME'],
+                        choices=['UPDATEDB', 'MATCHDB', 'RENAME', 'TOJSON', 'TOCSV'],
                         help='Processing mode [UPDATEDB: add file meta to db, MATCHDB: match file meta with db, RENAME: reame files by metadata')
     parser.add_argument('--similarity_min', type=int, default=0,
                         help='Filter matchdb mode results based on similarity >= X [default: 0]')
@@ -225,7 +227,7 @@ def a1111_meta_to_dict_to_json(params):
     #nSteps: 20, Sampler: Euler a, CFG scale: 8.5, Seed: 2518596816, Size: 512x768, Model hash: 7dd744682a'
 
 
-def get_meta(path, png, image_hash):
+def get_meta(path, png, image_hash, png_meta_as_dict=False):
     file_name = os.path.basename(path)
     try:
         meta_dict = png.info
@@ -237,11 +239,11 @@ def get_meta(path, png, image_hash):
         elif ('parameters' in meta_dict):   # a1111
             sd_meta = a1111_meta_to_dict_to_json(meta_dict['parameters'])
         else:
-            raise InvalidMeta("No known meta found in [file_path: \"%s\"]" % path)
+            raise InvalidMeta("No known meta found in [file_path:\"%s\"]" % path)
     except KeyError as e:
         log.warning("no known meta found in [file_path: %s]" % path)
         raise InvalidMeta(e)
-    meta_json = json.dumps(meta_dict)
+    png_info = meta_dict if png_meta_as_dict else json.dumps(meta_dict)
     if sd_meta[META_TYPE_KEY] == MetaType.INVOKEAI.value:
         result = {"meta_type": sd_meta[META_TYPE_KEY],
                   "file_name": file_name,
@@ -257,7 +259,7 @@ def get_meta(path, png, image_hash):
                   "height": sd_meta['image']['height'],
                   "width": sd_meta['image']['width'],
                   "seed": sd_meta['image']['seed'],
-                  "png_info": meta_json,
+                  "png_info": png_info,
                   "image_hash": image_hash,
                   "file_ctime_iso": timestamp_to_iso(os.path.getctime(path)),
                   "file_mtime_iso": timestamp_to_iso(os.path.getmtime(path))}
@@ -276,7 +278,7 @@ def get_meta(path, png, image_hash):
                   "height": sd_meta['height'],
                   "width": sd_meta['width'],
                   "seed": sd_meta['seed'],
-                  "png_info": meta_json,
+                  "png_info": png_info,
                   "image_hash": image_hash,
                   "file_ctime": os.path.getctime(path),
                   "file_mtime": os.path.getmtime(path),
@@ -478,9 +480,31 @@ def rename_file(file_path, png, image_hash):
         os.rename(file_path, out_path)
 
 
+def print_file_meta_json(path, png, image_hash):
+    try:
+        file_meta = get_meta(path, png, image_hash, png_meta_as_dict=True)
+    except InvalidMeta as e:
+        log.warning("Unable to read meta from [file_path: \"%s\"], skipping .." % path)
+        log.debug(e)
+        return
+    print(json.dumps(file_meta, indent=4))
+
+
+def print_file_meta_csv(path, png, image_hash):
+    print_pattern = "%s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | \"%s\" | \"%s\""
+    try:
+        file_meta = get_meta(path, png, image_hash)
+    except InvalidMeta as e:
+        log.warning("Unable to read meta from [file_path: \"%s\"], skipping .." % path)
+        log.debug(e)
+        return
+    file_meta['prompt'] = sanitize_prompt(file_meta['prompt'])
+    print(print_pattern % meta_to_output_tuple(file_meta))
+
+
 def process_file(file_path, idx):
     try:
-        png = Image.open(str(file_path))
+        png = Image.open(str(file_path) )
         png.load() # needed to get for .png EXIF data
     except (AttributeError, IsADirectoryError) as e:  # directory or other type?
         log.warning("Not a file, skipping: %s" % file_path)
@@ -495,7 +519,7 @@ def process_file(file_path, idx):
         log.debug(str(e))
         return
     try:
-        image_hash = file_hash(file_path)
+        image_hash = file_hash(file_path) # TODO optimize: consider moving to later stage, may not be needed in all cases
     except OSError as e:
         log.warning("I/O error while calculate image hash for file [\"%s\"], skipping ...")
         log.debug(e)
@@ -507,6 +531,10 @@ def process_file(file_path, idx):
         db_match(file_path, png, image_hash, idx, args.sort_matches)
     elif (mode == Mode.RENAME):
         rename_file(file_path, png, image_hash)
+    elif (mode == Mode.TOJSON):
+        print_file_meta_json(file_path, png, image_hash)
+    elif (mode == Mode.TOCSV):
+        print_file_meta_csv(file_path, png, image_hash)
     else:  # should never happen
         log.error("Unknown mode: %s" % mode)
         sys.exit(1)
@@ -541,4 +569,7 @@ def process_paths():
 if __name__ == '__main__':
     init()
     start_time = time.time()
+    # TODO handle somewhere else
+    if (mode == Mode.TOCSV):
+        print('steps | cfg_scale | sampler | height | width | seed | model_hash | model_weights | meta_type | type | image_hash | file_name | file_ctime | file_mtime | app_id | app_version | prompt')
     process_paths()
