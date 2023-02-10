@@ -39,6 +39,7 @@ class Mode(Enum):
     RENAME = 3
     TOJSON = 4
     TOCSV = 5
+    TOKEYVALUE = 6
 
 META_TYPE_KEY = 'meta_type'
 class MetaType(Enum):
@@ -64,7 +65,7 @@ def args_init():
     parser.add_argument('infile', type=Path, nargs='+',
                         help='One or more file names, directories, or glob patterns')
     parser.add_argument('--mode', type=str, default='UPDATEDB',
-                        choices=['UPDATEDB', 'MATCHDB', 'RENAME', 'TOJSON', 'TOCSV'],
+                        choices=['UPDATEDB', 'MATCHDB', 'RENAME', 'TOJSON', 'TOCSV', 'TOKEYVALUE'],
                         help='Processing mode [UPDATEDB: add file meta to db, MATCHDB: match file meta with db, RENAME: reame files by metadata')
     parser.add_argument('--similarity_min', type=int, default=0,
                         help='Filter matchdb mode results based on similarity >= X [default: 0]')
@@ -365,7 +366,7 @@ def db_update_or_create_meta(path, png, image_hash):
     else:  # record with same image hash found
         if (file_name_org != os.path.basename(path)):
             log.debug("updating meta, file_name will change from [\"%s\"] to [\"%s\"]" %
-                      (file_name_org, os.path.basename(path)))
+            (file_name_org, os.path.basename(path)))
         db_update_meta(path, png, image_hash)
 
 
@@ -374,10 +375,13 @@ def print_column_headrs():
     print('in_file_idx | db_file_idx | file_source | similarity | steps | cfg_scale | sampler | height | width | seed | model_hash | model_weights | meta_type | type | image_hash | file_name | file_ctime | file_mtime | app_id | app_version | prompt')
 
 
-def sanitize_prompt(prompt):
+def sanitize_value(val, escape_quotes=True):
+    val_str = str(val)
     # escape double-quotes " in prompt (promt will be within " on output)
     # replace all newline with spaces
-    return re.sub(r'\r?\n', r' ', re.sub(r'(["\\])', r'\\\1', prompt).strip())
+    result = re.sub(r'(["\\])', r'\\\1', val_str) if escape_quotes else val_str
+    result = re.sub(r'\r?\n', r' ', result).strip()
+    return result
 
 
 def timestamp_to_iso(ts):
@@ -394,7 +398,7 @@ def meta_to_output_tuple(dict):
     return (dict['steps'], dict['cfg_scale'], dict['sampler'], dict['height'], dict['width'], dict['seed'],
             dict['model_hash'], dict['model_weights'], dict[META_TYPE_KEY], dict['type'], dict['image_hash'],
             dict['file_ctime_iso'], dict['file_mtime_iso'], dict['file_name'],
-            dict['app_id'], dict['app_version'], sanitize_prompt(prompt_esc))
+            dict['app_id'], dict['app_version'], sanitize_value(prompt_esc))
 
 
 def db_match(path, png, image_hash, idx, sort=False):
@@ -406,9 +410,8 @@ def db_match(path, png, image_hash, idx, sort=False):
         log.warning("Unable to read meta from [file_path: \"%s\"], skipping .." % path)
         log.debug(e)
         return
-    file_meta['prompt'] = sanitize_prompt(file_meta['prompt'])
-    sql_select = """SELECT steps, cfg_scale, sampler, height, width, seed, model_hash, model_weights,
-                           meta_type, type, image_hash, file_name, file_ctime, file_mtime, app_id, app_version, prompt FROM meta;"""
+    file_meta['prompt'] = sanitize_value(file_meta['prompt'])
+    sql_select = """SELECT steps, cfg_scale, sampler, height, width, seed, model_hash, model_weights, meta_type, type, image_hash, file_name, file_ctime, file_mtime, app_id, app_version, prompt FROM meta;"""
     cur = conn.cursor()
     cur.execute(sql_select)
     result_set = cur.fetchall()
@@ -418,7 +421,7 @@ def db_match(path, png, image_hash, idx, sort=False):
     i = 1
     for row in result_set:
         row_meta = dict(row)
-        row_meta['prompt'] = sanitize_prompt(row_meta['prompt'])
+        row_meta['prompt'] = sanitize_value(row_meta['prompt'])
         row_meta['file_ctime_iso'] = timestamp_to_iso(row_meta['file_ctime'])
         row_meta['file_mtime_iso'] = timestamp_to_iso(row_meta['file_mtime'])
         #print("-----> %s\n-----> %s" % (row_meta['prompt'], file_meta['prompt']))
@@ -498,8 +501,20 @@ def print_file_meta_csv(path, png, image_hash):
         log.warning("Unable to read meta from [file_path: \"%s\"], skipping .." % path)
         log.debug(e)
         return
-    file_meta['prompt'] = sanitize_prompt(file_meta['prompt'])
+    file_meta['prompt'] = sanitize_value(file_meta['prompt'])
     print(print_pattern % meta_to_output_tuple(file_meta))
+
+
+def print_file_meta_keyvalue(path, png, image_hash):
+    try:
+        file_meta = get_meta(path, png, image_hash)
+        #file_meta.pop('png_meta')  # don't print png_meta
+    except InvalidMeta as e:
+        log.warning("Unable to read meta from [file_path: \"%s\"], skipping .." % path)
+        log.debug(e)
+        return
+    for key, val in file_meta.items():
+        print("%s: %s" % (key, sanitize_value(val)))
 
 
 def process_file(file_path, idx):
@@ -535,6 +550,8 @@ def process_file(file_path, idx):
         print_file_meta_json(file_path, png, image_hash)
     elif (mode == Mode.TOCSV):
         print_file_meta_csv(file_path, png, image_hash)
+    elif (mode == Mode.TOKEYVALUE):
+        print_file_meta_keyvalue(file_path, png, image_hash)
     else:  # should never happen
         log.error("Unknown mode: %s" % mode)
         sys.exit(1)

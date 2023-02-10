@@ -63,6 +63,28 @@ Python 3.8+ and the following pips:
 
 Pretty basic (still a prototype):
 
+=== Parse and output file metadata
+
+Metadata to JSON:
+
+ ./main.py --mode TOJSON my_image.png
+
+Metadata to CSV (basic, pipe separated):
+
+ ./main.py --mode TOJSON my_image.png
+
+Metadata to key-value in format "key: value" (one line per key, newlines stripped from value):
+
+ ./main.py --mode TOKEYVALUE my_image.png
+
+The latter can be used in combination with the link:InvokeAI.ahk[] AutoHotkey (v2) script:
+
+1. Run link:to-keyvalue.bat[] with a single png file as argument (e.g. via Hotkey in https://www.xnview.com/en/xnviewmp/[XnView NP]), which will retrive and send all relevant meta in key-value format to the clipboard.
+2. Open InvokeAI in the browser, focus the prompt textarea, and press `F10`
+3. The script will parse the clipboard content and try to fill the form with meta vales: prompt, steps, cfg scale, width, height, and sampler (if compatible)
+
+_Note that this solution is pretty basic, it will e.g. just press `Tab` to reach the next input field, which may not always work as expcted._
+
 === Transfer PNG metadata into DB
 Scan invoke-ai png file metadata into the DB (insert new, update existing records, based on hash code):
 
@@ -71,6 +93,7 @@ Scan invoke-ai png file metadata into the DB (insert new, update existing record
 on windows with more verbose output:
 
  python main.py --recursive --loglevel_cl INFO "D:\sd\output\**\*.png"
+
 
 === Match file prompt against DB
 Scan one or more png files comparing them with the db file prompts:
