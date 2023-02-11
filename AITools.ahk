@@ -39,6 +39,8 @@ F10::
   local height := ""
   local width := ""
   local seed := ""
+  local batch_size := ""
+  local batch_count := ""
 
   local clip := StrReplace(A_Clipboard, '`r', '')
   local n_count
@@ -63,7 +65,7 @@ F10::
   {
     local key := StrLower(StrReplace(RegExReplace(A_LoopField, "^([^:]+):.*", "$1"), " ", "_"))
     ; only get values that we need
-    if (! RegExMatch(key, "i)^(prompt|negative[_ ]prompt|steps|cfg[_ ]scale|sampler|height|width|seed)")) {
+    if (! RegExMatch(key, "i)^(prompt|negative[_ ]prompt|steps|cfg[_ ]scale|sampler|height|width|seed|batch[_ ]size|batch[_ ]count)")) {
       Continue
     }
     local val := Trim(RegExReplace(A_LoopField, "^[^:]+:\s+", ""))
@@ -87,48 +89,44 @@ F10::
     }
   }
 
-  SendInput "^a"  ; select all
-  ClipPaste(prompt)
+  AIToolsSend(prompt, true, true, true)
   SendInput "{Tab}"
-  SendInput "^a"  ; select all
-  if (negative_prompt != "")
-  {
-    ClipPaste(negative_prompt)
-  }
-  else
-  {
-    Send "{Backspace}"  ; clear potentially existing negative prompt (since clip has none)
-  }
+  AIToolsSend(negative_prompt, true, true, true)
 
   if (is_automatic1111)
   {
-    SendInput "{Tab 9}"  ; skip buttons and image count
-    SendText sampler
+    SendInput "{Tab 9}"
+    AIToolsSend sampler
     SendInput "{Tab}"
-    SendText steps
+    AIToolsSend steps
     SendInput "{Tab 5}"
-    SendText width
+    AIToolsSend width
     SendInput "{Tab 2}"
-    SendText height
-    SendInput "{Tab 7}"
-    SendText cfg_scale
+    AIToolsSend height
+    SendInput "{Tab 3}"
+    AIToolsSend batch_count
     SendInput "{Tab 2}"
-    SendText seed
+    AIToolsSend batch_size
+    SendInput "{Tab 2}"
+    AIToolsSend cfg_scale
+    SendInput "{Tab 2}"
+    AIToolsSend seed
   }
   else  ; invoke-ai
   {
-    SendInput "{Tab 3}"  ; skip buttons and image count
+    SendInput "{Tab 2}"
+    AIToolsSend batch_size
     SendInput "^a"  ; select all
-    SendText steps
+    AIToolsSend steps
     SendInput "{Tab}"
     SendInput "^a"  ; select all
-    SendText cfg_scale
+    AIToolsSend cfg_scale
     SendInput "{Tab}"
-    SendText width
+    AIToolsSend width
     SendInput "{Tab}"
-    SendText height
+    AIToolsSend height
     SendInput "{Tab}"
-    SendText sampler
+    AIToolsSend sampler
     ; FIXME for some reason this goes wild
     ; TODO this only works in case seed is unfolded and editable
     ;SendInput "{Tab 3}"
@@ -136,8 +134,36 @@ F10::
   }
 }
 
+
+AIToolsSend(val, select_all:=false, paste:=false, clear_if_empty:=false)
+{
+  if (select_all)
+  {
+    SendInput "^a"  ; select all
+  }
+  if (Trim(val) != "")
+  {
+    if (paste)
+    {
+      ClipPaste(val)
+    }
+    else
+    {
+      SendText val
+    }
+  }
+  else
+  {
+    if (clear_if_empty)
+    {
+      Send "{Backspace}"
+    }
+  }
+}
+
+
 ; https://tdalon.blogspot.com/2021/04/ahk-paste-restore-clipboard-pitfall.html
-ClipPaste(text, restore := True)
+ClipPaste(text, restore:=true)
 {
   If (restore)
   {
