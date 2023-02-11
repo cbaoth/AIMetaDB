@@ -5,6 +5,7 @@ v0.1, 2023-01-24
 :toc-placement: auto
 //:sectnums:
 //:sectnumlevels: 3
+:imagesdir: ./adoc_assets
 :source-highlighter: prettify
 //:source-highlighter: highlight.js
 
@@ -77,13 +78,14 @@ Metadata to key-value in format "key: value" (one line per key, newlines strippe
 
  ./main.py --mode TOKEYVALUE my_image.png
 
-The latter can be used in combination with the link:InvokeAI.ahk[] AutoHotkey (v2) script:
+The latter can be used in combination with the link:AITools.ahk[] AutoHotkey (v2) script:
 
-1. Run link:to-keyvalue.bat[] with a single png file as argument (e.g. via Hotkey in https://www.xnview.com/en/xnviewmp/[XnView NP]), which will retrive and send all relevant meta in key-value format to the clipboard.
-2. Open InvokeAI in the browser, focus the prompt textarea, and press `F10`
-3. The script will parse the clipboard content and try to fill the form with meta vales: prompt, steps, cfg scale, width, height, and sampler (if compatible)
+1. Run link:to-keyvalue.bat[] with a single png file as argument (e.g. via Hotkey in https://www.xnview.com/en/xnviewmp/[XnView NP]) to put meta into the clipboard, or copy meta from various websites.
+2. Open A1111 or InvokeAI _(the latter being only partially supported)_ in the browser, focus the prompt textarea, and press `F10` to fill the form fields with the values from the clipboard meta.
 
-_Note that this solution is pretty basic, it will e.g. just press `Tab` to reach the next input field, which may not always work as expcted._
+image:ahk_paste_meta.gif[]
+
+_Note that this solution is pretty basic, has some flaws and limitations, especially due to the fact that Tab is used to naviate the form, which heavily relies on matching tab-indexes, tab not being otherwise intercepted, and fields being accessible/visible/editable._
 
 === Transfer PNG metadata into DB
 Scan invoke-ai png file metadata into the DB (insert new, update existing records, based on hash code):
