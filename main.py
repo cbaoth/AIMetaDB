@@ -204,13 +204,17 @@ def file_hash(path):
 def a1111_meta_to_dict_to_json(params):
     #[p, s] = re.split(r'\n(Steps: )', params)   # FIXME comple all regex globally
     #try:
-    if ('Steps: ' in params):
-        if ('\n' in params):
-            [p, s] = params.rsplit('\n', 1)
-        else:
-            p = ""
-            s = params
-    else:
+    p = ""
+    np = ""
+    s = ""
+    for l in re.split(r'\n', params):
+        if (p == "" and re.match(r'^(prompt|template)', l, flags=re.IGNORECASE)):
+            p = re.sub(r'(prompt|template):\s*', r'', l, flags=re.IGNORECASE)
+        elif (np == "" and re.match(r'^negative (prompt|template)', l, flags=re.IGNORECASE)):
+            np = re.sub(r'negative (prompt|template):\s*', r'', l, flags=re.IGNORECASE)
+        elif (s == "" and len(re.findall(r'(steps|sampler|size|seed|model hash|cfg scale): ', l, flags=re.IGNORECASE)) >= 4):
+            s = l
+    if (s == ""):
         raise InvalidMeta("Unable to process presumed A1111 meta: %s" % params)
     #try:
     result = dict(map(lambda e: [e[0].lower().replace(' ', '_'), e[1]], re.findall(r'[, ]*([^:]+): ([^,]+)?', s)))
@@ -218,6 +222,7 @@ def a1111_meta_to_dict_to_json(params):
     #    log.error("Unable to process presumed A1111 meta: %s" % params)
     #    raise InvalidMeta(str(e))
     result['prompt'] = p
+    result['negative_prompt'] = np
     [result['width'], result['height']] = result['size'].split('x')
     result['app_id'] = 'AUTOMATIC1111/stable-diffusion-webui'
     result['app_version'] = None # info not provided
@@ -254,6 +259,7 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False):
                   "model_hash": sd_meta['model_hash'],
                   "type": sd_meta['image']['type'],
                   "prompt": sd_meta['image']['prompt'][0]['prompt'],
+                  #"negative_prompt": sd_meta['image']['prompt'][0]['negative_prompt'],
                   "steps": sd_meta['image']['steps'],
                   "cfg_scale": sd_meta['image']['cfg_scale'],
                   "sampler": sd_meta['image']['sampler'],
@@ -273,6 +279,7 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False):
                   "model_hash": sd_meta['model_hash'],
                   "type": sd_meta['type'],
                   "prompt": sd_meta['prompt'],
+                  "negative_prompt": sd_meta['negative_prompt'],
                   "steps": sd_meta['steps'],
                   "cfg_scale": sd_meta['cfg_scale'],
                   "sampler": sd_meta['sampler'],
