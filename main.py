@@ -250,7 +250,9 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False):
         log.warning("no known meta found in [file_path: %s]" % path)
         raise InvalidMeta(e)
     png_info = meta_dict if png_meta_as_dict else json.dumps(meta_dict)
+    m = sd_meta.copy()
     if sd_meta[META_TYPE_KEY] == MetaType.INVOKEAI.value:
+        # TODO add all fields (update m with flattened keys)
         result = {"meta_type": sd_meta[META_TYPE_KEY],
                   "file_name": file_name,
                   "app_id": sd_meta['app_id'],
@@ -271,27 +273,15 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False):
                   "file_ctime_iso": timestamp_to_iso(os.path.getctime(path)),
                   "file_mtime_iso": timestamp_to_iso(os.path.getmtime(path))}
     else:  # A1111
-        result = {"meta_type": sd_meta[META_TYPE_KEY],
+        m.update({"meta_type": sd_meta[META_TYPE_KEY],
                   "file_name": file_name,
-                  "app_id": sd_meta['app_id'],
-                  "app_version": sd_meta['app_version'],
-                  "model_weights": sd_meta['model_weights'],
-                  "model_hash": sd_meta['model_hash'],
-                  "type": sd_meta['type'],
-                  "prompt": sd_meta['prompt'],
-                  "negative_prompt": sd_meta['negative_prompt'],
-                  "steps": sd_meta['steps'],
-                  "cfg_scale": sd_meta['cfg_scale'],
-                  "sampler": sd_meta['sampler'],
-                  "height": sd_meta['height'],
-                  "width": sd_meta['width'],
-                  "seed": sd_meta['seed'],
                   "png_info": png_info,
                   "image_hash": image_hash,
                   "file_ctime": os.path.getctime(path),
                   "file_mtime": os.path.getmtime(path),
                   "file_ctime_iso": timestamp_to_iso(os.path.getctime(path)),
-                  "file_mtime_iso": timestamp_to_iso(os.path.getmtime(path))}
+                  "file_mtime_iso": timestamp_to_iso(os.path.getmtime(path))})
+        result = m;
     log.debug('meta data extracted: %s' % pp.pformat(result))
     return result
 
