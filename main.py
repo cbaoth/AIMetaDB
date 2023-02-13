@@ -218,7 +218,7 @@ def a1111_meta_to_dict_to_json(params):
             result.update(dict(map(lambda e: [e[0].lower().strip().replace(' ', '_'), e[1].strip()], re.findall(r'[, ]*([^:]+): ([^,]+)?', l))))
         else:
             # add to dict
-            result[re.sub(r'^([^:]+):.*', r'\1', l).lower().strip().replace(' ', '_')] = re.sub(r'^[^:]+:\\s*(.*)', r'\1', l).strip()
+            result[re.sub(r'^([^:]+):.*', r'\1', l).lower().strip().replace(' ', '_')] = re.sub(r'^[^:]+: *(.*)', r'\1', l).strip()
     # does this look like a1111 meta? (crude check)
     re_exp_find = r'([{}|]|__)'
     re_exp_warn = r'(.{6}(?:[{}|]|__).{6}|(?:[{}|]|__).{6}|.{6}(?:[{}|]|__)|(?:[{}|]|__))'
