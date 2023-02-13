@@ -19,9 +19,15 @@ global is_invokeai := WinActive("InvokeAI - A Stable Diffusion Toolkit")
 global is_automatic1111 := !is_invokeai
 
 ; F10: Paste values from clipboard (if any) into A1111/Invoke-AI form
+; Alt-F10: Same as above but take (negative) prompt-tempalte instead
+;   (if existing, otherwise regular prompt)
 ; assuming the main prompt-textarea is in focus
 F10::
+!F10::
 {
+  ; in case alt was pressed use templates (if existing)
+  local template_mode := GetKeyState("Alt")
+
   ; brief check if shit somehow looks like the right stuff
   if (! InStr(A_Clipboard, "steps: ") && ! InStr(A_Clipboard, "cfg_scale: "))
   {
@@ -33,6 +39,8 @@ F10::
   local dictstr := ""
   local prompt := ""
   local negative_prompt := ""
+  local template := ""
+  local negative_template := ""
   local steps := ""
   local cfg_scale := ""
   local sampler := ""
@@ -54,7 +62,7 @@ F10::
     ;negative_prompt := RegExReplace(a[1], "i)negative[_ ]prompt: ", "")
     dictstr := "prompt: " . a[1] . '`n' . a[2] . '`n' . StrReplace(RegExReplace(a[3], "i)size: +([0-9]+)x([0-9]+)", "width: $1, height: $2"), ", ", "`n")
   }
-  else
+  else  ; assuming ai-meta-tools format
   {
     dictstr := clip
   }
@@ -63,9 +71,9 @@ F10::
   ; parse clipboard
   Loop Parse, dictstr, "`n", "`r"
   {
-    local key := StrLower(StrReplace(RegExReplace(A_LoopField, "^([^:]+):.*", "$1"), " ", "_"))
+    local key := StrLower(StrReplace(Trim(RegExReplace(A_LoopField, "^([^:]+):.*", "$1")), " ", "_"))
     ; only get values that we need
-    if (! RegExMatch(key, "i)^(prompt|negative[_ ]prompt|steps|cfg[_ ]scale|sampler|height|width|seed|batch[_ ]size|batch[_ ]count)")) {
+    if (! RegExMatch(key, "i)^(prompt|template|negative[_ ](prompt|template)|steps|cfg[_ ]scale|sampler|height|width|seed|batch[_ ]size|batch[_ ]count)")) {
       Continue
     }
     local val := Trim(RegExReplace(A_LoopField, "^[^:]+:\s+", ""))
@@ -77,21 +85,28 @@ F10::
     ;MsgBox key . " = " . val
   }
 
-  ; in case of a1111 combined prompt split by negative prompt prefix
-  ; TODO check if a1111 meta
-  if (negative_prompt == "" && InStr(prompt, "Negative prompt: "))
+  ; in case alt was pressed use templates (if existing)
+  if (template_mode && template != "")
   {
-    parts := StrSplit(prompt, "Negative prompt: ",, 2)
-    if (parts.Length >= 2)
-    {
-      prompt := parts[1]
-      negative_prompt := parts[2]
-    }
+    AIToolsSend(template, true, true, true)
+  }
+  else
+  {
+    AIToolsSend(prompt, true, true, true)
   }
 
-  AIToolsSend(prompt, true, true, true)
   SendInput "{Tab}"
-  AIToolsSend(negative_prompt, true, true, true)
+  ; in case alt was pressed use templates (if existing)
+  if (template_mode && negative_template != "")
+  {
+    AIToolsSend(negative_template, true, true, true)
+  }
+  else
+  {
+    AIToolsSend(negative_prompt, true, true, true)
+  }
+
+  ; TODO add other modifiers like "restore_face"
 
   if (is_automatic1111)
   {
