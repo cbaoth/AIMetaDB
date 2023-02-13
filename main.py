@@ -204,25 +204,30 @@ def file_hash(path):
 def a1111_meta_to_dict_to_json(params):
     #[p, s] = re.split(r'\n(Steps: )', params)   # FIXME comple all regex globally
     #try:
-    p = ""
-    np = ""
-    s = ""
+    result = {}
+    is_prompt = True
     for l in re.split(r'\n', params):
-        if (p == "" and re.match(r'^(prompt|template)', l, flags=re.IGNORECASE)):
-            p = re.sub(r'(prompt|template):\s*', r'', l, flags=re.IGNORECASE)
-        elif (np == "" and re.match(r'^negative (prompt|template)', l, flags=re.IGNORECASE)):
-            np = re.sub(r'negative (prompt|template):\s*', r'', l, flags=re.IGNORECASE)
-        elif (s == "" and len(re.findall(r'(steps|sampler|size|seed|model hash|cfg scale): ', l, flags=re.IGNORECASE)) >= 4):
-            s = l
-    if (s == ""):
-        raise InvalidMeta("Unable to process presumed A1111 meta: %s" % params)
-    #try:
-    result = dict(map(lambda e: [e[0].lower().replace(' ', '_'), e[1]], re.findall(r'[, ]*([^:]+): ([^,]+)?', s)))
-    #except BaseException as e:
-    #    log.error("Unable to process presumed A1111 meta: %s" % params)
-    #    raise InvalidMeta(str(e))
-    result['prompt'] = p
-    result['negative_prompt'] = np
+        # first line is always prompt (w/o prefix)
+        if (is_prompt):
+            result['prompt'] = l
+            is_prompt = False
+            continue
+        # at least 4 of the known core attributes in current line? (crude check)
+        if (len(re.findall(r'(steps|sampler|size|seed|model hash|cfg scale): ', l, flags=re.IGNORECASE)) >= 4):
+            # convert to dict
+            result.update(dict(map(lambda e: [e[0].lower().strip().replace(' ', '_'), e[1].strip()], re.findall(r'[, ]*([^:]+): ([^,]+)?', l))))
+        else:
+            # add to dict
+            result[re.sub(r'^([^:]+):.*', r'\1', l).lower().strip().replace(' ', '_')] = re.sub(r'^[^:]+:\\s*(.*)', r'\1', l).strip()
+    # does this look like a1111 meta? (crude check)
+    re_exp_find = r'([{}|]|__)'
+    re_exp_warn = r'(.{6}(?:[{}|]|__).{6}|(?:[{}|]|__).{6}|.{6}(?:[{}|]|__)|(?:[{}|]|__))'
+    if (len(result) <= 0 or ('prompt' not in result) or ('steps' not in result)):
+        raise InvalidMeta("Unable to process presumed A1111 meta:\n%s\n-> %s" % (params, result))
+    if (len(re.findall(re_exp_find, result['prompt'])) > 0):
+        log.warning('Prompt seems to contain un-evaluated expressions, please check! %s' % re.findall(re_exp_warn, result['prompt']))
+    if (re.match(re_exp_find, result['negative_prompt'])):
+        log.warning('Prompt seems to contain un-evaluated expressions, please check! %s' % str(re.findall(re_exp_warn, result['negative_prompt'])))
     [result['width'], result['height']] = result['size'].split('x')
     result['app_id'] = 'AUTOMATIC1111/stable-diffusion-webui'
     result['app_version'] = None # info not provided
