@@ -8,6 +8,10 @@
 # https://github.com/seatgeek/thefuzz
 # https://github.com/AUTOMATIC1111/stable-diffusion-webui-tokenizer
 
+# TODO
+# model_weights (iai) vs model (1111)
+# add templates to db
+
 import argparse
 from datetime import datetime
 from pathlib import Path
@@ -206,6 +210,7 @@ def a1111_meta_to_dict_to_json(params):
     #try:
     result = {}
     is_prompt = True
+    last_key = ""
     for l in re.split(r'\n', params):
         # first line is always prompt (w/o prefix)
         if (is_prompt):
@@ -216,9 +221,19 @@ def a1111_meta_to_dict_to_json(params):
         if (len(re.findall(r'(steps|sampler|size|seed|model hash|cfg scale): ', l, flags=re.IGNORECASE)) >= 4):
             # convert to dict
             result.update(dict(map(lambda e: [e[0].lower().strip().replace(' ', '_'), e[1].strip()], re.findall(r'[, ]*([^:]+): ([^,]+)?', l))))
-        else:
+        elif (re.match(r'^[\w -]+: ', l)): # TODO improve, multi-line template might have lines starting like this
             # add to dict
-            result[re.sub(r'^([^:]+):.*', r'\1', l).lower().strip().replace(' ', '_')] = re.sub(r'^[^:]+: *(.*)', r'\1', l).strip()
+            key = re.sub(r'^([^:]+):.*', r'\1', l).lower().strip().replace(' ', '_')
+            val = re.sub(r'^[^:]+: *(.*)', r'\1', l).strip()
+            result[key] = val
+            last_key = key
+        else:
+            # continue multi-line field (append)
+            if (last_key == ""):
+                log.warning("found value without key, skipping ... [%s]" % val)
+                continue
+            result[last_key] += " " + l.strip()
+
     # does this look like a1111 meta? (crude check)
     re_exp_find = r'([{}|]|__)'
     re_exp_warn = r'(.{6}(?:[{}|]|__).{6}|(?:[{}|]|__).{6}|.{6}(?:[{}|]|__)|(?:[{}|]|__))'
