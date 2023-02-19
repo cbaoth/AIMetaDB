@@ -9,7 +9,6 @@
 # https://github.com/AUTOMATIC1111/stable-diffusion-webui-tokenizer
 
 # TODO
-# model_weights (iai) vs model (1111)
 # add templates to db
 
 import argparse
@@ -31,7 +30,7 @@ from pprint import PrettyPrinter
 #import imagehash
 from enum import Enum
 
-DEFAULT_FNAME_PATTERN = '{file_ctime_iso}_{model_hash_short}-{seed}-{image_hash_short}_[{cfg_scale}@{steps}, {sampler}]'
+DEFAULT_FNAME_PATTERN = '{file_ctime_iso}_{model_hash_short}-{seed}-{image_hash_short}_[{cfg_scale}@{steps}#{sampler}#{model}]'
 DEFAULT_DB_FILE = str(Path.home()) + '/ai_meta.db'
 DEFAULT_LOG_FILE = str(Path.home()) + '/ai_meta.log'
 DEFAULT_LOGLEVEL_FILE = 'INFO'
@@ -68,7 +67,7 @@ def args_init():
     parser = argparse.ArgumentParser(description='AIMetaDB - A Invoke-AI PNG file metadata processor')
     parser.add_argument('infile', type=Path, nargs='+',
                         help='One or more file names, directories, or glob patterns')
-    parser.add_argument('--mode', type=str, default='UPDATEDB',
+    parser.add_argument('--mode', type=str.upper, default='UPDATEDB',
                         choices=['UPDATEDB', 'MATCHDB', 'RENAME', 'TOJSON', 'TOCSV', 'TOKEYVALUE'],
                         help='Processing mode [UPDATEDB: add file meta to db, MATCHDB: match file meta with db, RENAME: reame files by metadata')
     parser.add_argument('--similarity_min', type=int, default=0,
@@ -79,16 +78,18 @@ def args_init():
                         help='File renaming pattern for RENAME mode [default: %s]' % DEFAULT_FNAME_PATTERN)  # todo document available fields
     parser.add_argument('--no-act', action='store_true',
                         help='Only print what would be done without changing anything (mode = RENAME only)')
+    parser.add_argument('--include_png_info', action='store_true',
+                        help='Include full png_info when printing meta (mode = TOJSON|TOKEYVALUE only)')
     parser.add_argument('--recursive', action='store_true',
                         help='Process directories and ** glob patterns recursively')
     parser.add_argument('--dbfile', type=str, default=DEFAULT_DB_FILE,
                         help='DB file location [default: %s]' % DEFAULT_DB_FILE)
     parser.add_argument('--logfile', type=str, default=DEFAULT_LOG_FILE,
                         help='Log file location [default: %s]' % DEFAULT_LOG_FILE)
-    parser.add_argument('--loglevel_file', type=str, default=DEFAULT_LOGLEVEL_FILE,
+    parser.add_argument('--loglevel_file', type=str.upper, default=DEFAULT_LOGLEVEL_FILE,
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
                         help='Log level for log file [default: %s], loglevel_cl will overwrite if higher' % DEFAULT_LOGLEVEL_FILE)
-    parser.add_argument('--loglevel_cl', type=str, default=DEFAULT_LOGLEVEL_CL,
+    parser.add_argument('--loglevel_cl', type=str.upper, default=DEFAULT_LOGLEVEL_CL,
                         choices=['NONE', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
                         help='Log level for command line output [default: %s], NONE for quiet mode (results only)' % DEFAULT_LOGLEVEL_CL)
     global args, mode
@@ -143,7 +144,7 @@ def db_init(dbfile):
                                 file_name text,
                                 app_id text,
                                 app_version text,
-                                model_weights text,
+                                model text,
                                 model_hash text,
                                 type text,
                                 prompt text,
@@ -247,13 +248,12 @@ def a1111_meta_to_dict_to_json(params):
     result['app_id'] = 'AUTOMATIC1111/stable-diffusion-webui'
     result['app_version'] = None # info not provided
     result['type'] = None  # info not provided (t2i/i2i)
-    result['model_weights'] = None  # info not provided (weights name), TODO consider mapping
     result[META_TYPE_KEY] = MetaType.A1111.value
     return result
     #nSteps: 20, Sampler: Euler a, CFG scale: 8.5, Seed: 2518596816, Size: 512x768, Model hash: 7dd744682a'
 
 
-def get_meta(path, png, image_hash, png_meta_as_dict=False):
+def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=False):
     file_name = os.path.basename(path)
     try:
         meta_dict = png.info
@@ -277,7 +277,7 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False):
                   "file_name": file_name,
                   "app_id": sd_meta['app_id'],
                   "app_version": sd_meta['app_version'],
-                  "model_weights": sd_meta['model_weights'],
+                  "model": sd_meta['model_weights'],
                   "model_hash": sd_meta['model_hash'],
                   "type": sd_meta['image']['type'],
                   "prompt": sd_meta['image']['prompt'][0]['prompt'],
@@ -288,20 +288,20 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False):
                   "height": sd_meta['image']['height'],
                   "width": sd_meta['image']['width'],
                   "seed": sd_meta['image']['seed'],
-                  "png_info": png_info,
                   "image_hash": image_hash,
                   "file_ctime_iso": timestamp_to_iso(os.path.getctime(path)),
                   "file_mtime_iso": timestamp_to_iso(os.path.getmtime(path))}
     else:  # A1111
         m.update({"meta_type": sd_meta[META_TYPE_KEY],
                   "file_name": file_name,
-                  "png_info": png_info,
                   "image_hash": image_hash,
                   "file_ctime": os.path.getctime(path),
                   "file_mtime": os.path.getmtime(path),
                   "file_ctime_iso": timestamp_to_iso(os.path.getctime(path)),
                   "file_mtime_iso": timestamp_to_iso(os.path.getmtime(path))})
         result = m;
+    if include_png_info:
+        result['png_info'] = png_info
     log.debug('meta data extracted: %s' % pp.pformat(result))
     return result
 
@@ -318,12 +318,12 @@ def db_insert_meta(path, png, image_hash):
     file_name = os.path.basename(path)
     log.info("inserting meta in db for [image_hash: %s, path: \"%s\"" % (image_hash, str(path)))
     sql_insert_meta = """INSERT INTO meta (meta_type, file_name, app_id, app_version,
-                                           model_weights, model_hash, type, prompt,
+                                           model, model_hash, type, prompt,
                                            steps, cfg_scale, sampler,
                                            height, width, seed, png_info,
                                            image_hash, file_ctime, file_mtime)
                          VALUES (:meta_type, :file_name, :app_id, :app_version,
-                                 :model_weights, :model_hash, :type, :prompt,
+                                 :model, :model_hash, :type, :prompt,
                                  :steps, :cfg_scale, :sampler,
                                  :height, :width, :seed, :png_info,
                                  :image_hash, :file_ctime, :file_mtime);"""
@@ -356,7 +356,7 @@ def db_update_meta(path, png, image_hash):
     log.info("updating meta in db for [image_hash: %s, path: \"%s\"" % (image_hash, str(path)))
     sql_update_meta = """UPDATE meta
                          SET meta_type = :meta_type, file_name = :file_name, app_id = :app_id, app_version = :app_version,
-                             model_weights = :model_weights, model_hash = :model_hash, type = :type, prompt = :prompt,
+                             model = :model, model_hash = :model_hash, type = :type, prompt = :prompt,
                              steps = :steps, cfg_scale = :cfg_scale, sampler = :sampler,
                              height = :height, width = :width, seed = :seed, png_info = :png_info,
                              file_ctime = file_ctime, file_mtime = file_mtime
@@ -389,7 +389,7 @@ def db_update_or_create_meta(path, png, image_hash):
 
 def print_column_headrs():
     # TODO support custom pattern
-    print('in_file_idx | db_file_idx | file_source | similarity | steps | cfg_scale | sampler | height | width | seed | model_hash | model_weights | meta_type | type | image_hash | file_name | file_ctime | file_mtime | app_id | app_version | prompt')
+    print('in_file_idx | db_file_idx | file_source | similarity | steps | cfg_scale | sampler | height | width | seed | model_hash | model | meta_type | type | image_hash | file_name | file_ctime | file_mtime | app_id | app_version | prompt')
 
 
 def sanitize_value(val, escape_quotes=True):
@@ -413,7 +413,7 @@ def meta_to_output_tuple(dict):
     # TODO support custom patterns
     prompt_esc = re.sub(r'\r?\n', r' ', re.sub(r'(["\\])', r'\\\1', dict['prompt']).strip())
     return (dict['steps'], dict['cfg_scale'], dict['sampler'], dict['height'], dict['width'], dict['seed'],
-            dict['model_hash'], dict['model_weights'], dict[META_TYPE_KEY], dict['type'], dict['image_hash'],
+            dict['model_hash'], dict['model'], dict[META_TYPE_KEY], dict['type'], dict['image_hash'],
             dict['file_ctime_iso'], dict['file_mtime_iso'], dict['file_name'],
             dict['app_id'], dict['app_version'], sanitize_value(prompt_esc))
 
@@ -428,7 +428,7 @@ def db_match(path, png, image_hash, idx, sort=False):
         log.debug(e)
         return
     file_meta['prompt'] = sanitize_value(file_meta['prompt'])
-    sql_select = """SELECT steps, cfg_scale, sampler, height, width, seed, model_hash, model_weights, meta_type, type, image_hash, file_name, file_ctime, file_mtime, app_id, app_version, prompt FROM meta;"""
+    sql_select = """SELECT steps, cfg_scale, sampler, height, width, seed, model_hash, model, meta_type, type, image_hash, file_name, file_ctime, file_mtime, app_id, app_version, prompt FROM meta;"""
     cur = conn.cursor()
     cur.execute(sql_select)
     result_set = cur.fetchall()
@@ -500,9 +500,10 @@ def rename_file(file_path, png, image_hash):
         os.rename(file_path, out_path)
 
 
-def print_file_meta_json(path, png, image_hash):
+def print_file_meta_json(path, png, image_hash, include_png_info=False):
     try:
-        file_meta = get_meta(path, png, image_hash, png_meta_as_dict=True)
+        file_meta = get_meta(path, png, image_hash, png_meta_as_dict=True, include_png_info=include_png_info)
+        del file_meta['png_info']
     except InvalidMeta as e:
         log.warning("Unable to read meta from [file_path: \"%s\"], skipping .." % path)
         log.debug(e)
@@ -522,9 +523,9 @@ def print_file_meta_csv(path, png, image_hash):
     print(print_pattern % meta_to_output_tuple(file_meta))
 
 
-def print_file_meta_keyvalue(path, png, image_hash):
+def print_file_meta_keyvalue(path, png, image_hash, include_png_info=False):
     try:
-        file_meta = get_meta(path, png, image_hash)
+        file_meta = get_meta(path, png, image_hash, include_png_info=include_png_info)
         #file_meta.pop('png_meta')  # don't print png_meta
     except InvalidMeta as e:
         log.warning("Unable to read meta from [file_path: \"%s\"], skipping .." % path)
@@ -564,11 +565,11 @@ def process_file(file_path, idx):
     elif (mode == Mode.RENAME):
         rename_file(file_path, png, image_hash)
     elif (mode == Mode.TOJSON):
-        print_file_meta_json(file_path, png, image_hash)
+        print_file_meta_json(file_path, png, image_hash, include_png_info=args.include_png_info)
     elif (mode == Mode.TOCSV):
         print_file_meta_csv(file_path, png, image_hash)
     elif (mode == Mode.TOKEYVALUE):
-        print_file_meta_keyvalue(file_path, png, image_hash)
+        print_file_meta_keyvalue(file_path, png, image_hash, include_png_info=args.include_png_info)
     else:  # should never happen
         log.error("Unknown mode: %s" % mode)
         sys.exit(1)
@@ -605,5 +606,5 @@ if __name__ == '__main__':
     start_time = time.time()
     # TODO handle somewhere else
     if (mode == Mode.TOCSV):
-        print('steps | cfg_scale | sampler | height | width | seed | model_hash | model_weights | meta_type | type | image_hash | file_name | file_ctime | file_mtime | app_id | app_version | prompt')
+        print('steps | cfg_scale | sampler | height | width | seed | model_hash | model | meta_type | type | image_hash | file_name | file_ctime | file_mtime | app_id | app_version | prompt')
     process_paths()
