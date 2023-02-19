@@ -19,14 +19,19 @@ global is_invokeai := WinActive("InvokeAI - A Stable Diffusion Toolkit")
 global is_automatic1111 := !is_invokeai
 
 ; F10: Paste values from clipboard (if any) into A1111/Invoke-AI form
-; Alt-F10: Same as above but take (negative) prompt-tempalte instead
-;   (if existing, otherwise regular prompt)
-; assuming the main prompt-textarea is in focus
+; Alt*F10: Toggle template prompts (vs. actual prompts)
+; Shift*F10: Toggle seed unchanged (vs. setting it)
+; For this to work it a) assuming the main prompt-textarea is in focus and
+;   b) that no additional fields (e.g. from extensions) are in the way
+; TODO consider providing a configration for this instead of 100 hotkeys
 F10::
 !F10::
++F10::
+!+F10::
 {
   ; in case alt was pressed use templates (if existing)
   local template_mode := GetKeyState("Alt")
+  local no_seed_mode := GetKeyState("Shift")
 
   ; brief check if shit somehow looks like the right stuff
   if (! InStr(A_Clipboard, "steps: ") && ! InStr(A_Clipboard, "cfg_scale: "))
@@ -124,8 +129,11 @@ F10::
     AIToolsSend batch_size
     SendInput "{Tab 2}"
     AIToolsSend cfg_scale
-    SendInput "{Tab 2}"
-    AIToolsSend seed
+    if (!no_seed_mode)
+    {
+      SendInput "{Tab 2}"
+      AIToolsSend seed
+    }
   }
   else  ; invoke-ai
   {
@@ -144,8 +152,11 @@ F10::
     AIToolsSend sampler
     ; FIXME for some reason this goes wild
     ; TODO this only works in case seed is unfolded and editable
-    ;SendInput "{Tab 3}"
-    ;SendText seed
+    ;if (!no_seed_mode)
+    ;{
+    ;  SendInput "{Tab 3}"
+    ;  SendText seed
+    ;}
   }
 }
 
