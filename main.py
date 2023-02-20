@@ -503,7 +503,6 @@ def rename_file(file_path, png, image_hash):
 def print_file_meta_json(path, png, image_hash, include_png_info=False):
     try:
         file_meta = get_meta(path, png, image_hash, png_meta_as_dict=True, include_png_info=include_png_info)
-        del file_meta['png_info']
     except InvalidMeta as e:
         log.warning("Unable to read meta from [file_path: \"%s\"], skipping .." % path)
         log.debug(e)
