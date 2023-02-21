@@ -123,9 +123,9 @@ def db_connect(db_file):
     try:
         conn = sqlite3.connect(db_file)
         conn.row_factory = sqlite3.Row  # we want dict results (vs plain lists)
-        log.info("db version: %s" % sqlite3.version)
+        log.info("DB version: %s" % sqlite3.version)
     except Error as e:
-        log.error("unable to create db connection, exiting: %s" % e)
+        log.error("Unable to create DB connection, exiting: %s" % e)
         sys.exit(1)
     # init db (if new)
     #finally:
@@ -135,7 +135,7 @@ def db_connect(db_file):
 
 # initialize db if non-existing
 def db_init(dbfile):
-    log.info("opening db connection to: %s" % dbfile)
+    log.info("Opening DB connection to: %s" % dbfile)
     db_connect(dbfile)
     sql_create_meta_table = """CREATE TABLE IF NOT EXISTS meta (
                                 id integer PRIMARY KEY,
@@ -171,7 +171,7 @@ def db_init(dbfile):
     try:
         cur = conn.cursor()
         #cur.execute(f"PRAGMA foreign_keys = ON;")
-        log.debug("ensuring db table [meta] exists.")
+        log.debug("Ensuring DB table [meta] exists.")
 
         # migrate
         #cur.execute('alter table meta add column meta_type integer')
@@ -181,10 +181,10 @@ def db_init(dbfile):
         #conn.commit()
 
         cur.execute(sql_create_meta_table);
-        #log.info("ensuring db table exists: json")
+        #log.info("Ensuring DB table exists: json")
         #cur.execute(sql_create_meta_json_table);
     except Error as e:
-        log.error("unable to initialize db, exiting:\n%s" % e)
+        log.error("Unable to initialize DB, exiting:\n%s" % e)
         sys.exit(1)
 
 
@@ -231,8 +231,7 @@ def a1111_meta_to_dict_to_json(params):
         else:
             # continue multi-line field (append)
             if (last_key == ""):
-                log.warning("found value without key, skipping ... [%s]" % val)
-                continue
+                continue # ignore continueation of first line (redundant prompt)
             result[last_key] += " " + l.strip()
 
     # does this look like a1111 meta? (crude check)
@@ -267,7 +266,7 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
         else:
             raise InvalidMeta("No known meta found in [file_path:\"%s\"]" % path)
     except KeyError as e:
-        log.warning("no known meta found in [file_path: %s]" % path)
+        log.warning("No known meta found in [file_path: %s]" % path)
         raise InvalidMeta(e)
     png_info = meta_dict if png_meta_as_dict else json.dumps(meta_dict)
     m = sd_meta.copy()
@@ -302,7 +301,7 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
         result = m;
     if include_png_info:
         result['png_info'] = png_info
-    log.debug('meta data extracted: %s' % pp.pformat(result))
+    log.debug('Meta extracted: %s' % pp.pformat(result))
     return result
 
 
@@ -316,7 +315,7 @@ def db_get_meta_file_name_by_hash(image_hash):
 
 def db_insert_meta(path, png, image_hash):
     file_name = os.path.basename(path)
-    log.info("inserting meta in db for [image_hash: %s, path: \"%s\"" % (image_hash, str(path)))
+    log.info("Inserting meta in DB for [image_hash: %s, path: \"%s\"" % (image_hash, str(path)))
     sql_insert_meta = """INSERT INTO meta (meta_type, file_name, app_id, app_version,
                                            model, model_hash, type, prompt,
                                            steps, cfg_scale, sampler,
@@ -330,7 +329,7 @@ def db_insert_meta(path, png, image_hash):
     try:
         cur = conn.cursor()
         meta_values = get_meta(path, png, image_hash);
-        log.debug("db INSERT into meta: %s" % str(meta_values))
+        log.debug("DB INSERT into meta: %s" % str(meta_values))
         cur.execute(sql_insert_meta, meta_values)
         conn.commit()
     except InvalidMeta as e:
@@ -342,18 +341,18 @@ def db_insert_meta(path, png, image_hash):
         # todo: compare file names
         row = res.fetchone()
         if (row[0] == file_name):
-            log.info("skipping existing entry: [hash_hase: %s, file_name_old: \"%s\", file_name_new: \"%s\"]" % (image_hash, row[0], file_name))
+            log.info("Skipping existing entry: [hash_hase: %s, file_name_old: \"%s\", file_name_new: \"%s\"]" % (image_hash, row[0], file_name))
         else:
-            log.info("skipping existing entry: [hash_hase: %s, file_name: \"%s\"]" % (image_hash, file_name))
-        log.debug("failed to insert duplicate png into db, existing record: %s" % str(dict((row))))
+            log.info("Skipping existing entry: [hash_hase: %s, file_name: \"%s\"]" % (image_hash, file_name))
+        log.debug("Failed to insert duplicate png into DB, existing record: %s" % str(dict((row))))
         conn.rollback()
     except Error as e:
-        log.error("failed to insert new meta into db, transaction rollback: %s\n" % e)
+        log.error("Failed to insert new meta into DB, transaction rollback: %s\n" % e)
         conn.rollback()
 
 
 def db_update_meta(path, png, image_hash):
-    log.info("updating meta in db for [image_hash: %s, path: \"%s\"" % (image_hash, str(path)))
+    log.info("Updating meta in DB for [image_hash: %s, path: \"%s\"" % (image_hash, str(path)))
     sql_update_meta = """UPDATE meta
                          SET meta_type = :meta_type, file_name = :file_name, app_id = :app_id, app_version = :app_version,
                              model = :model, model_hash = :model_hash, type = :type, prompt = :prompt,
@@ -364,7 +363,7 @@ def db_update_meta(path, png, image_hash):
     try:
         cur = conn.cursor()
         meta_values = get_meta(path, png, image_hash);
-        log.debug("db UPDATE into meta: %s" % str(meta_values))
+        log.debug("DB UPDATE into meta: %s" % str(meta_values))
         cur.execute(sql_update_meta, meta_values)
         conn.commit()
     except InvalidMeta as e:
@@ -372,7 +371,7 @@ def db_update_meta(path, png, image_hash):
         log.debug(e)
         return;
     except Error as e:
-        log.error("failed to update existing meta in db, transaction rollback:\n" % e)
+        log.error("Failed to update existing meta in DB, transaction rollback:\n" % e)
         conn.rollback()
 
 
@@ -382,7 +381,7 @@ def db_update_or_create_meta(path, png, image_hash):
         db_insert_meta(path, png, image_hash)
     else:  # record with same image hash found
         if (file_name_org != os.path.basename(path)):
-            log.debug("updating meta, file_name will change from [\"%s\"] to [\"%s\"]" %
+            log.debug("Updating meta, file_name will change from [\"%s\"] to [\"%s\"]" %
             (file_name_org, os.path.basename(path)))
         db_update_meta(path, png, image_hash)
 
@@ -432,7 +431,7 @@ def db_match(path, png, image_hash, idx, sort=False):
     cur = conn.cursor()
     cur.execute(sql_select)
     result_set = cur.fetchall()
-    log.debug("meta for file [\"%s\"]:\n%s" % (path, file_meta))
+    log.debug("Meta for file [\"%s\"]:\n%s" % (path, file_meta))
     # TODO allow file output (nice to have, redirect possible)
     file_printed = False
     i = 1
@@ -444,7 +443,7 @@ def db_match(path, png, image_hash, idx, sort=False):
         #print("-----> %s\n-----> %s" % (row_meta['prompt'], file_meta['prompt']))
         similarity = fuzz.token_sort_ratio(row_meta['prompt'], file_meta['prompt'])
         if (file_meta['image_hash'] == row_meta['image_hash']):
-            log.debug("skipping db meta with same image_hash as given file")
+            log.debug("Skipping DB meta with same image_hash as given file")
             continue
         if (similarity >= args.similarity_min):
             if (not file_printed):  # print current file in first iteration (not at all if no matches were found)
@@ -576,27 +575,27 @@ def process_file(file_path, idx):
 
 def process_paths():
     start_time_proc = time.time()
-    log.info("starting [mode=%s] ..." % args.mode)
+    log.info("Starting [mode=%s] ..." % args.mode)
     idx = 1
     for f in args.infile:
         start_time_path_arg = time.time()
-        log.debug("processing [file_arg: \"%s\"] ..." % f)
+        log.debug("Processing [file_arg: \"%s\"] ..." % f)
         # single file or glob expansion
         # FIXME currently can't handle "./" recursion (maybe others too)
         file_paths = [f] if (f.exists() and f.is_file()) else [Path(p) for p in glob(str(f.expanduser()), recursive=args.recursive)]
         if (len(file_paths) <= 0):
-            log.warning("no file(s) found for infile pattern [\"%s\"], skipping ..." % f)
+            log.warning("No file(s) found for infile pattern [\"%s\"], skipping ..." % f)
             continue
         for file_path in file_paths:
             start_time_file = time.time()
-            log.info("processing [#%s, file: \"%s\"] ..." % (idx, file_path))
+            log.info("Processing [#%s, file: \"%s\"] ..." % (idx, file_path))
             process_file(file_path, idx)
-            log.debug("finished processing file [#%s, exec_time: %ssec, file_path: \"%s\"]" %
+            log.debug("Finished processing file [#%s, exec_time: %ssec, file_path: \"%s\"]" %
                       (idx, round(time.time() - start_time_file, 3), file_path))
             idx = idx + 1
-        log.debug("finished processing file_arg [exec_time: %ssec, file_arg: \"%s\"]" %
+        log.debug("Finished processing file_arg [exec_time: %ssec, file_arg: \"%s\"]" %
                   (round(time.time() - start_time_path_arg, 3), f))
-    log.info("finished [mode=%s, exec_time: %ssec]!" %
+    log.info("Finished [mode=%s, exec_time: %ssec]!" %
              (mode.name, round(time.time() - start_time_proc, 3)))
 
 
