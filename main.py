@@ -480,7 +480,14 @@ def rename_file(file_path, png, image_hash):
     meta['image_hash_short'] = meta['image_hash'][0:10]
     meta['file_ctime_iso'] = meta['file_ctime_iso'].replace(':', '') # strip specials
     meta['file_mtime_iso'] = meta['file_mtime_iso'].replace(':', '') # strip specials
-    out_file_name = args.fname_pattern.format(**meta) + meta['file_ext']
+    # TODO consider set all fields
+    if ('model' not in meta): # model is sometimes missing resulting in an error
+        meta['model'] = '-na-'
+    try:
+        out_file_name = args.fname_pattern.format(**meta) + meta['file_ext']
+    except KeyError as e:
+        log.warning("Unable to rename [file_path: \"%s\"] due to missing mesa field [%s], skipping ..." % (file_path, e))
+        return
     out_file_name_sanitized = re.sub(r'[^,.;\[\]{}&%#@+\w-]', '_', out_file_name)
     out_path = os.path.normpath(os.path.join(path, out_file_name_sanitized))
     if (os.path.normpath(file_path) == out_path):
