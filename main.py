@@ -312,8 +312,9 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
                   "file_ctime_iso": timestamp_to_iso(os.path.getctime(path)),
                   "file_mtime_iso": timestamp_to_iso(os.path.getmtime(path))})
         result = m;
-    xmp = xmltodict.parse(meta_dict['XML:com.adobe.xmp'])
-    result['rating'] = find_in_dict(xmp, 'xmp:Rating')
+    if ('XML:com.adobe.xmp' in meta_dict):
+        xmp = xmltodict.parse(meta_dict['XML:com.adobe.xmp'])
+        result['rating'] = find_in_dict(xmp, 'xmp:Rating')
     if include_png_info:
         result['png_info'] = png_info
     log.debug('Meta extracted: %s' % pp.pformat(result))
