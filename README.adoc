@@ -57,8 +57,11 @@ Python 3.8+ and the following pips:
  # https://pillow.readthedocs.io/ - to read png metadata
  pip install pillow
 
- # https://github.com/seatgeek/thefuzz - to find prompt similarities using  Levenshtein Distance
+ # https://github.com/seatgeek/thefuzz - to find prompt similarities using Levenshtein Distance
  pip install "thefuzz[speedup]"
+
+ # https://pypi.org/project/xmltodict/ - to process xmp data
+ pip install xmltodict
 
 == Usage
 

@@ -19,6 +19,7 @@ from glob import glob
 from PIL import Image, UnidentifiedImageError
 import sqlite3
 from sqlite3 import Error
+import xmltodict
 import json
 import sys, os
 import logging
@@ -240,9 +241,9 @@ def a1111_meta_to_dict_to_json(params):
     if (len(result) <= 0 or ('prompt' not in result) or ('steps' not in result)):
         raise InvalidMeta("Unable to process presumed A1111 meta:\n%s\n-> %s" % (params, result))
     if (len(re.findall(re_exp_find, result['prompt'])) > 0):
-        log.warning('Prompt seems to contain un-evaluated expressions, please check! %s' % re.findall(re_exp_warn, result['prompt']))
+        log.info('Prompt seems to contain un-evaluated expressions, please check before re-using prompt: %s' % re.findall(re_exp_warn, result['prompt']))
     if (re.match(re_exp_find, result['negative_prompt'])):
-        log.warning('Prompt seems to contain un-evaluated expressions, please check! %s' % str(re.findall(re_exp_warn, result['negative_prompt'])))
+        log.info('Prompt seems to contain un-evaluated expressions,, please check before re-using prompt: %s' % str(re.findall(re_exp_warn, result['negative_prompt'])))
     [result['width'], result['height']] = result['size'].split('x')
     result['app_id'] = 'AUTOMATIC1111/stable-diffusion-webui'
     result['app_version'] = None # info not provided
@@ -252,10 +253,22 @@ def a1111_meta_to_dict_to_json(params):
     #nSteps: 20, Sampler: Euler a, CFG scale: 8.5, Seed: 2518596816, Size: 512x768, Model hash: 7dd744682a'
 
 
+# https://stackoverflow.com/a/14962509
+def find_in_dict(obj, key):
+    if key in obj: return obj[key]
+    for k, v in obj.items():
+        if isinstance(v,dict):
+            item = find_in_dict(v, key)
+            if item is not None:
+                return item
+
+
 def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=False):
     file_name = os.path.basename(path)
     try:
         meta_dict = png.info
+        #meta_dict['xmp_json'] = json.dumps(xmltodict.parse(meta_dict['XML:com.adobe.xmp']), indent=4)
+        #print(meta_dict['xmp_json'])
         if ('sd-metadata' in meta_dict):  # invoke-ai
             # parse sd-metadata (json) string to dict
             sd_meta = json.loads(meta_dict['sd-metadata'])
@@ -299,6 +312,8 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
                   "file_ctime_iso": timestamp_to_iso(os.path.getctime(path)),
                   "file_mtime_iso": timestamp_to_iso(os.path.getmtime(path))})
         result = m;
+    xmp = xmltodict.parse(meta_dict['XML:com.adobe.xmp'])
+    result['rating'] = find_in_dict(xmp, 'xmp:Rating')
     if include_png_info:
         result['png_info'] = png_info
     log.debug('Meta extracted: %s' % pp.pformat(result))
