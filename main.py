@@ -351,28 +351,32 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
         # TODO add exception handling since we assume a lot of things
         found_seed_node = False
         for id in m['comfyui_prompt']:
-            node = m['comfyui_prompt'][id]
-            # prompt
-            if node['class_type'].startswith('CLIPTextEncode') and is_none_or_empty(m['prompt']):
-                m['prompt'] = node['inputs']['text']
-            # model
-            if node['class_type'] == 'CheckpointLoaderSimple' and is_none_or_empty(m['model']):
-                m['model'] = os.path.splitext(node['inputs']['ckpt_name'])[0]
-            # sampler
-            if node['class_type'].startswith('KSampler'):
-                if is_none_or_empty(m['steps']):
-                    m['steps'] = str(node['inputs']['steps'])
-                if is_none_or_empty(m['cfg_scale']):
-                    m['cfg_scale'] = str(node['inputs']['cfg'])
-                if is_none_or_empty(m['sampler']):
-                    m['sampler'] = node['inputs']['sampler_name'] + '_' + node['inputs']['scheduler']
-                # seed from any regular sampler (no WAS since it takes it as input)
-                if node['class_type'] in ['KSampler', 'KSamplerAdvanced'] and is_none_or_empty(m['seed']):
+            try:
+                node = m['comfyui_prompt'][id]
+                # prompt
+                if node['class_type'].startswith('CLIPTextEncode') and is_none_or_empty(m['prompt']):
+                    m['prompt'] = node['inputs']['text']
+                # model
+                if node['class_type'] == 'CheckpointLoaderSimple' and is_none_or_empty(m['model']):
+                    m['model'] = os.path.splitext(node['inputs']['ckpt_name'])[0]
+                # sampler
+                if node['class_type'].startswith('KSampler'):
+                    if is_none_or_empty(m['steps']):
+                        m['steps'] = str(node['inputs']['steps'])
+                    if is_none_or_empty(m['cfg_scale']):
+                        m['cfg_scale'] = str(node['inputs']['cfg'])
+                    if is_none_or_empty(m['sampler']):
+                        m['sampler'] = node['inputs']['sampler_name'] + '_' + node['inputs']['scheduler']
+                    # seed from any regular sampler (no WAS since it takes it as input)
+                    if node['class_type'] in ['KSampler', 'KSamplerAdvanced'] and is_none_or_empty(m['seed']):
+                        m['seed'] = str(node['inputs']['seed'])
+                # seed from Seed node (superseeds any other seed)
+                if node['class_type'] == 'Seed' and not found_seed_node:
+                    found_seed_node = True
                     m['seed'] = str(node['inputs']['seed'])
-            # seed from Seed node (superseeds any other seed)
-            if node['class_type'] == 'Seed' and not found_seed_node:
-                found_seed_node = True
-                m['seed'] = str(node['inputs']['seed'])
+            except KeyError as e:
+                log.info('Unable to process ComfyUI node meta, skipping: %s' % e)
+                continue
         result = m;
 
     if ('XML:com.adobe.xmp' in meta_dict):
