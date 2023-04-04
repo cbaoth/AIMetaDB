@@ -37,11 +37,11 @@ F10::
   ; in case alt was pressed use templates (if existing)
   local template_mode := GetKeyState("Alt")
   local no_seed_mode := GetKeyState("Shift")
-  local see_only_mode := GetKeyState("Ctrl")
+  local seed_only_mode := GetKeyState("Ctrl")
 
-  if (see_only_mode)
+  if (seed_only_mode)
   {
-    AISendMeta("seed")
+    AISendMeta("seed", true)
     return
   }
 
