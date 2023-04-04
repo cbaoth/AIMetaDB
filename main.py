@@ -31,7 +31,7 @@ from pprint import PrettyPrinter
 #import imagehash
 from enum import Enum
 
-DEFAULT_FNAME_PATTERN = '{file_ctime_iso}_{model_hash_short}-{seed}-{image_hash_short}_[{cfg_scale}@{steps}#{sampler}#{model}]'
+DEFAULT_FNAME_PATTERN = '{file_ctime_iso}_{model_hash_short}-{seed}-{image_hash_short}_{meta_type_name}_[{cfg_scale}@{steps}#{sampler}#{model}]'
 DEFAULT_DB_FILE = str(Path.home()) + '/ai_meta.db'
 DEFAULT_LOG_FILE = str(Path.home()) + '/ai_meta.log'
 DEFAULT_LOGLEVEL_FILE = 'INFO'
@@ -49,6 +49,7 @@ META_TYPE_KEY = 'meta_type'
 class MetaType(Enum):
     INVOKEAI = 1
     A1111 = 2
+    COMFYUI = 3
 
 log = logging
 args = None
@@ -263,6 +264,10 @@ def find_in_dict(obj, key):
                 return item
 
 
+def is_none_or_empty(str):
+    return str is None or str.strip() == ""
+
+
 def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=False):
     file_name = os.path.basename(path)
     try:
@@ -276,6 +281,12 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
             meta_dict['sd-metadata'] = sd_meta  # overwrite json-string with dict
         elif ('parameters' in meta_dict):   # a1111
             sd_meta = a1111_meta_to_dict_to_json(meta_dict['parameters'])
+            sd_meta[META_TYPE_KEY] = MetaType.A1111.value
+        elif ('workflow' in meta_dict):   # comfyui
+            sd_meta = {}
+            sd_meta['comfyui_prompt'] = json.loads(meta_dict['prompt'])
+            sd_meta['comfyui_workflow'] = json.loads(meta_dict['workflow'])
+            sd_meta[META_TYPE_KEY] = MetaType.COMFYUI.value
         else:
             raise InvalidMeta("No known meta found in [file_path:\"%s\"]" % path)
     except KeyError as e:
@@ -284,8 +295,10 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
     png_info = meta_dict if png_meta_as_dict else json.dumps(meta_dict)
     m = sd_meta.copy()
     if sd_meta[META_TYPE_KEY] == MetaType.INVOKEAI.value:
+
         # TODO add all fields (update m with flattened keys)
         result = {"meta_type": sd_meta[META_TYPE_KEY],
+                  "meta_type_name": MetaType.INVOKEAI.name,
                   "file_name": file_name,
                   "app_id": sd_meta['app_id'],
                   "app_version": sd_meta['app_version'],
@@ -303,8 +316,9 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
                   "image_hash": image_hash,
                   "file_ctime_iso": timestamp_to_iso(os.path.getctime(path)),
                   "file_mtime_iso": timestamp_to_iso(os.path.getmtime(path))}
-    else:  # A1111
+    elif sd_meta[META_TYPE_KEY] == MetaType.A1111.value:
         m.update({"meta_type": sd_meta[META_TYPE_KEY],
+                  "meta_type_name": MetaType.A1111.name,
                   "file_name": file_name,
                   "image_hash": image_hash,
                   "file_ctime": os.path.getctime(path),
@@ -312,6 +326,55 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
                   "file_ctime_iso": timestamp_to_iso(os.path.getctime(path)),
                   "file_mtime_iso": timestamp_to_iso(os.path.getmtime(path))})
         result = m;
+    else:  # comfyui
+        m.update({"meta_type": sd_meta[META_TYPE_KEY],
+                  "meta_type_name": MetaType.COMFYUI.name,
+                  "file_name": file_name,
+                  "app_id": "comfyanonymous/ComfyUI",
+                  "app_version": None,   # info not provided
+                  "model": "",           # default if none found below
+                  "model_hash": "",      # info not provided
+                  "type": None,          # info not provided (t2i/i2i)
+                  "prompt": "",          # default if none found below
+                  "steps": "",           # default if none found below
+                  "cfg_scale": "",       # default if none found below
+                  "sampler": "",         # default if none found below
+                  "height": png.height,  # take dimensions from png
+                  "width": png.width,    # take dimensions from png
+                  "image_hash": image_hash,
+                  "file_ctime": os.path.getctime(path),
+                  "file_mtime": os.path.getmtime(path),
+                  "file_ctime_iso": timestamp_to_iso(os.path.getctime(path)),
+                  "file_mtime_iso": timestamp_to_iso(os.path.getmtime(path))})
+        # try to find some stuff, due to it's design there could be more than
+        # one result, let's just pick the first one we can find
+        # TODO add exception handling since we assume a lot of things
+        found_seed_node = False
+        for id in m['comfyui_prompt']:
+            node = m['comfyui_prompt'][id]
+            # prompt
+            if node['class_type'].startswith('CLIPTextEncode') and is_none_or_empty(m['prompt']):
+                m['prompt'] = node['inputs']['text']
+            # model
+            if node['class_type'] == 'CheckpointLoaderSimple' and is_none_or_empty(m['model']):
+                m['model'] = os.path.splitext(node['inputs']['ckpt_name'])[0]
+            # sampler
+            if node['class_type'].startswith('KSampler'):
+                if is_none_or_empty(m['steps']):
+                    m['steps'] = str(node['inputs']['steps'])
+                if is_none_or_empty(m['cfg_scale']):
+                    m['cfg_scale'] = str(node['inputs']['cfg'])
+                if is_none_or_empty(m['sampler']):
+                    m['sampler'] = node['inputs']['sampler_name'] + '_' + node['inputs']['scheduler']
+                # seed from any regular sampler (no WAS since it takes it as input)
+                if node['class_type'] in ['KSampler', 'KSamplerAdvanced'] and is_none_or_empty(m['seed']):
+                    m['seed'] = str(node['inputs']['seed'])
+            # seed from Seed node (superseeds any other seed)
+            if node['class_type'] == 'Seed' and not found_seed_node:
+                found_seed_node = True
+                m['seed'] = str(node['inputs']['seed'])
+        result = m;
+
     if ('XML:com.adobe.xmp' in meta_dict):
         xmp = xmltodict.parse(meta_dict['XML:com.adobe.xmp'])
         result['rating'] = find_in_dict(xmp, 'xmp:Rating')
@@ -344,7 +407,7 @@ def db_insert_meta(path, png, image_hash):
                                  :image_hash, :file_ctime, :file_mtime);"""
     try:
         cur = conn.cursor()
-        meta_values = get_meta(path, png, image_hash);
+        meta_values = get_meta(path, png, image_hash, include_png_info=True);
         log.debug("DB INSERT into meta: %s" % str(meta_values))
         cur.execute(sql_insert_meta, meta_values)
         conn.commit()
@@ -378,7 +441,7 @@ def db_update_meta(path, png, image_hash):
                          WHERE image_hash = :image_hash;"""
     try:
         cur = conn.cursor()
-        meta_values = get_meta(path, png, image_hash);
+        meta_values = get_meta(path, png, image_hash, include_png_info=True);
         log.debug("DB UPDATE into meta: %s" % str(meta_values))
         cur.execute(sql_update_meta, meta_values)
         conn.commit()
@@ -492,13 +555,16 @@ def rename_file(file_path, png, image_hash):
         return
     path = os.path.split(file_path)[0]
     [meta['file_name_noext'], meta['file_ext']] = os.path.splitext(meta['file_name'])
+
+    # ensure that some major fields exist (with dummy value if necessary)
+    for f in ['model', 'seed', 'sampler', 'cfg_scale', 'steps', 'model_hash', 'image_hash']:
+        if f not in meta: meta[f] = '_'
+    # shortened versions
     meta['model_hash_short'] = meta['model_hash'][0:10]
     meta['image_hash_short'] = meta['image_hash'][0:10]
     meta['file_ctime_iso'] = meta['file_ctime_iso'].replace(':', '') # strip specials
     meta['file_mtime_iso'] = meta['file_mtime_iso'].replace(':', '') # strip specials
-    # TODO consider set all fields
-    if ('model' not in meta): # model is sometimes missing resulting in an error
-        meta['model'] = '-na-'
+
     try:
         out_file_name = args.fname_pattern.format(**meta) + meta['file_ext']
     except KeyError as e:

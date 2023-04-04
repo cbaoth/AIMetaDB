@@ -18,7 +18,7 @@ THIS IS JUST A PROTOTYPE FOR NOW!
 * ...
 
 === What's the idea behind this?
-Latest after creating AI images using my https://github.com/cbaoth/userscripts#invoke-ai-tweaks[invoke-ai-tweaks] userscript or other "mass production randomness madness" in https://github.com/invoke-ai/InvokeAI[InvokeAI] and https://github.com/AUTOMATIC1111/stable-diffusion-webui[Automatic1111], I got a pretty big mess of images with random prompts, samplers, sizes, etc. that are hard to sort/group plus I have no convenient way finding out which prompts and settings have the highest impact on good results.
+Latest after creating AI images using my https://github.com/cbaoth/userscripts#invoke-ai-tweaks[invoke-ai-tweaks] userscript or other "mass production randomness madness" in https://github.com/invoke-ai/InvokeAI[InvokeAI], https://github.com/AUTOMATIC1111/stable-diffusion-webui[Automatic1111] and https://github.com/comfyanonymous/ComfyUI[ComfyUI], I got a pretty big mess of images with random prompts, samplers, sizes, etc. that are hard to sort/group plus I have no convenient way finding out which prompts and settings have the highest impact on good results.
 
 Main goals, means to ..
 
@@ -33,7 +33,7 @@ Main goals, means to ..
 * .. group images into folders based on metadata
 
 === What it does already
-* Read most metadata from https://github.com/invoke-ai/InvokeAI[InvokeAI] and https://github.com/AUTOMATIC1111/stable-diffusion-webui[Automatic1111] PNG files _(files with missing details are skipped)_
+* Read most metadata from https://github.com/invoke-ai/InvokeAI[InvokeAI], https://github.com/AUTOMATIC1111/stable-diffusion-webui[Automatic1111], and https://github.com/comfyanonymous/ComfyUI[ComfyUI] PNG files _(files with missing details are skipped)_
 ** _Icluduse additional information like AI engine, unique image data hash code, etc._
 * `--mode UPDATEDB`: Store, upate, read this metadata in/from a SQLite DB
 * `--mode RENAME`: Rename wiles baesd on this metadata (custom pattern and dry-run support). _Example:_
@@ -44,6 +44,8 @@ Main goals, means to ..
 * `--mode TOJSON`: Print metadata of one or more files as json.
 ** Example: `./main.py --mode TOJSON ai_image.png | jq .prompt` -> Get prompt only
 * `--mode TOCSV`: Print metadata of one or more files as csv.
+
+_Note that ComfyUI supported is limited since there are no fixed fields due to it's node based approach (e.g. there might be multiple models, seeds, samplers, etc. used). Many assumptions are made in the current implementation and the first value found wins._
 
 === Some ideas (not yet implemented)
 * Directly match arg files w/o using the cache db
