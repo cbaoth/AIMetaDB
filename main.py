@@ -350,12 +350,19 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
         # one result, let's just pick the first one we can find
         # TODO add exception handling since we assume a lot of things
         found_seed_node = False
+        found_prompt_node = False
         for id in m['comfyui_prompt']:
             try:
                 node = m['comfyui_prompt'][id]
                 # prompt
-                if node['class_type'].startswith('CLIPTextEncode') and is_none_or_empty(m['prompt']):
-                    m['prompt'] = node['inputs']['text']
+                if node['class_type'].startswith('CLIPTextEncode') and not found_prompt_node:
+                    # always prefer nodes with positive and negative prompt (CLIPTextEncodeWildcards3)
+                    if 'positive' in node['inputs']:
+                        found_prompt_node = True
+                        m['prompt'] = node['inputs']['positive']
+                        m['negative_prompt'] = node['inputs']['negative']
+                    elif 'text' in node['inputs'] and is_none_or_empty(m['prompt']):
+                        m['prompt'] = node['inputs']['text']
                 # model
                 if node['class_type'] == 'CheckpointLoaderSimple' and is_none_or_empty(m['model']):
                     m['model'] = os.path.splitext(node['inputs']['ckpt_name'])[0]
