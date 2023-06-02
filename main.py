@@ -338,6 +338,7 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
                   "prompt": "",          # default if none found below
                   "steps": "",           # default if none found below
                   "cfg_scale": "",       # default if none found below
+                  #"clip_skip": "",       # default if none found below
                   "sampler": "",         # default if none found below
                   "height": png.height,  # take dimensions from png
                   "width": png.width,    # take dimensions from png
@@ -364,10 +365,12 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
                     elif 'text' in node['inputs'] and is_none_or_empty(m['prompt']):
                         m['prompt'] = node['inputs']['text']
                 # model
-                if node['class_type'] == 'CheckpointLoaderSimple' and is_none_or_empty(m['model']):
+                if node['class_type'] in ['CheckpointLoaderSimple', 'ttN pipeLoader'] and is_none_or_empty(m['model']):
                     m['model'] = os.path.splitext(node['inputs']['ckpt_name'])[0]
+                    #if is_none_or_empty(m['clip_skip']):
+                    #    m['clip_skip'] = str(node['inputs']['clip_skip'])
                 # sampler
-                if node['class_type'].startswith('KSampler'):
+                if (node['class_type'] in ['ttN pipeKSampler'] or node['class_type'].startswith('KSampler')) and is_none_or_empty(m['steps']):
                     if is_none_or_empty(m['steps']):
                         m['steps'] = str(node['inputs']['steps'])
                     if is_none_or_empty(m['cfg_scale']):
