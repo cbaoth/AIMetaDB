@@ -30,6 +30,7 @@ from thefuzz import fuzz, process
 from pprint import PrettyPrinter
 #import imagehash
 from enum import Enum
+import shutil
 
 DEFAULT_FNAME_PATTERN = '{file_ctime_iso}_{model_hash_short}-{seed}-{image_hash_short}_{meta_type_name}_[{cfg_scale}@{steps}#{sampler}#{model}]'
 DEFAULT_DB_FILE = str(Path.home()) + '/ai_meta.db'
@@ -84,6 +85,8 @@ def args_init():
                         help='Include full png_info when printing meta (mode = TOJSON|TOKEYVALUE only)')
     parser.add_argument('--recursive', action='store_true',
                         help='Process directories and ** glob patterns recursively')
+    parser.add_argument('--target-dir', type=str,
+                        help='After RENAME move file to the given target directory')
     parser.add_argument('--dbfile', type=str, default=DEFAULT_DB_FILE,
                         help='DB file location [default: %s]' % DEFAULT_DB_FILE)
     parser.add_argument('--logfile', type=str, default=DEFAULT_LOG_FILE,
@@ -586,6 +589,13 @@ def rename_file(file_path, png, image_hash):
         return
     out_file_name_sanitized = re.sub(r'[^,.;\[\]{}&%#@+\w-]', '_', out_file_name)
     out_path = os.path.normpath(os.path.join(path, out_file_name_sanitized))
+    use_target_dir = False
+    if args.target_dir:
+        use_target_dir = True
+        out_path = os.path.normpath(os.path.join(args.target_dir, out_file_name_sanitized))
+        if not Path(args.target_dir).exists():
+            log.info("The --target-dir '%s' doesn't exist, trying to create it .." % args.target_dir)
+            Path(args.target_dir).mkdir()
     if (os.path.normpath(file_path) == out_path):
         log.warning("Outfile identical to infile name [%s], skipping ..." % out_path)
     elif (Path(out_path).exists()):
@@ -595,6 +605,11 @@ def rename_file(file_path, png, image_hash):
         msg = "Would rename: [\"%s\"] -> [\"%s\"]" % (file_path, out_path)
         log.info(msg)
         print(msg)
+    elif (use_target_dir):
+        msg = "Moving: [\"%s\"] -> [\"%s\"]" % (file_path, out_path)
+        log.info(msg)
+        print(msg)
+        shutil.move(file_path, out_path)
     else:
         msg = "Renaming: [\"%s\"] -> [\"%s\"]" % (file_path, out_path)
         log.info(msg)
