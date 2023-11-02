@@ -32,7 +32,7 @@ from pprint import PrettyPrinter
 from enum import Enum
 import shutil
 
-DEFAULT_FNAME_PATTERN = '{file_ctime_iso}_{model_hash_short}-{seed}-{image_hash_short}_{meta_type_name}_[{cfg_scale}@{steps}#{sampler}#{model}]'
+DEFAULT_FNAME_PATTERN = '{file_ctime_iso}_{image_hash_short}_[app={meta_type_name}, seed={seed}, cfg={cfg_scale}, steps={steps}, sampler={sampler}, model={model}, mhash={model_hash_short}]'
 DEFAULT_DB_FILE = str(Path.home()) + '/ai_meta.db'
 DEFAULT_LOG_FILE = str(Path.home()) + '/ai_meta.log'
 DEFAULT_LOGLEVEL_FILE = 'INFO'
@@ -70,7 +70,7 @@ def args_init():
     parser = argparse.ArgumentParser(description='AIMetaDB - A Invoke-AI PNG file metadata processor')
     parser.add_argument('infile', type=Path, nargs='+',
                         help='One or more file names, directories, or glob patterns')
-    parser.add_argument('--mode', type=str.upper, default='UPDATEDB',
+    parser.add_argument('--mode', type=str.upper, default='TOKEYVALUE',
                         choices=['UPDATEDB', 'MATCHDB', 'RENAME', 'TOJSON', 'TOCSV', 'TOKEYVALUE'],
                         help='Processing mode [UPDATEDB: add file meta to db, MATCHDB: match file meta with db, RENAME: reame files by metadata')
     parser.add_argument('--similarity_min', type=int, default=0,
@@ -267,8 +267,8 @@ def find_in_dict(obj, key):
                 return item
 
 
-def is_none_or_empty(str):
-    return str is None or str.strip() == ""
+def is_none_or_empty(s):
+    return s is None or (isinstance(s, str) and s.strip() == "")
 
 
 def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=False):
@@ -340,6 +340,7 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
                   "type": None,          # info not provided (t2i/i2i)
                   "prompt": "",          # default if none found below
                   "steps": "",           # default if none found below
+                  "seed": "",           # default if none found below
                   "cfg_scale": "",       # default if none found below
                   #"clip_skip": "",       # default if none found below
                   "sampler": "",         # default if none found below
@@ -353,40 +354,70 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
         # try to find some stuff, due to it's design there could be more than
         # one result, let's just pick the first one we can find
         # TODO add exception handling since we assume a lot of things
-        found_seed_node = False
-        found_prompt_node = False
+        found_seed_node = False  # dedicated seed node found?
+        found_prompt_node = False  # dedicated prompt node found?
+        # workfolw meta values
+        for node in m['comfyui_workflow']['nodes']:
+            try:
+                # prompt
+                if (node['type'] in ['ttN text']) and not found_prompt_node:
+                    if 'prompt' in node['title'].lower():
+                        if 'neg' in node['title'].lower() and is_none_or_empty(m['negative_template']):
+                            m['negative_template'] = node['widgets_values'][0]
+                        elif is_none_or_empty(m['template']):
+                            m['template'] = node['widgets_values'][0]
+                ## model
+                #if node['type'] in ['CheckpointLoaderSimple', 'ttN pipeLoader'] and is_none_or_empty(m['model']):
+                #    m['model'] = node['widgets_values'][0]
+                # seed from Seed node (superseeds any other seed)
+                if node['type'] == 'Float' and 'cfg' in node['title'].lower() and is_none_or_empty(m['cfg_scale']):
+                    m['cfg_scale'] = node['widgets_values'][0]
+                if 'seed' in node['type'].lower() and not found_seed_node:
+                    found_seed_node = True
+                    m['seed'] = str(node['widgets_values'][0])
+            except KeyError as e:
+                log.info('Unable to process ComfyUI node meta, skipping: %s' % e)
+                continue
+
+        # prompt meta values
         for id in m['comfyui_prompt']:
             try:
                 node = m['comfyui_prompt'][id]
                 # prompt
-                if node['class_type'].startswith('CLIPTextEncode') and not found_prompt_node:
+                if (node['class_type'].startswith('CLIPTextEncode') or node['class_type'] in ['ttN text']) and not found_prompt_node:
                     # always prefer nodes with positive and negative prompt (CLIPTextEncodeWildcards3)
                     if 'positive' in node['inputs']:
                         found_prompt_node = True
                         m['prompt'] = node['inputs']['positive']
                         m['negative_prompt'] = node['inputs']['negative']
-                    elif 'text' in node['inputs'] and is_none_or_empty(m['prompt']):
-                        m['prompt'] = node['inputs']['text']
                 # model
                 if node['class_type'] in ['CheckpointLoaderSimple', 'ttN pipeLoader'] and is_none_or_empty(m['model']):
                     m['model'] = os.path.splitext(node['inputs']['ckpt_name'])[0]
                     #if is_none_or_empty(m['clip_skip']):
                     #    m['clip_skip'] = str(node['inputs']['clip_skip'])
+                # seed from Seed node (superseeds any other seed)
+                if node['class_type'] == 'ttN seed' and not found_seed_node:
+                    found_seed_node = True
+                    m['seed'] = str(node['widgets_values'][0])
+                if node['class_type'] == 'Seed' and not found_seed_node:
+                    found_seed_node = True
+                    m['seed'] = str(node['inputs']['seed'])
+                # seed from any regular sampler (no WAS since it takes it as input)
+                if node['class_type'] in ['KSampler', 'KSamplerAdvanced'] and not found_seed_node and is_none_or_empty(m['seed']):
+                    m['seed'] = str(node['inputs']['seed'])
                 # sampler
                 if (node['class_type'] in ['ttN pipeKSampler'] or node['class_type'].startswith('KSampler')) and is_none_or_empty(m['steps']):
+                    if is_none_or_empty(m['seed']) and not found_seed_node:
+                        try:
+                            m['seed'] = str(node['inputs']['seed'][0])
+                        except:
+                            m['seed'] = str(node['inputs']['seed'])
                     if is_none_or_empty(m['steps']):
                         m['steps'] = str(node['inputs']['steps'])
                     if is_none_or_empty(m['cfg_scale']):
                         m['cfg_scale'] = str(node['inputs']['cfg'])
                     if is_none_or_empty(m['sampler']):
                         m['sampler'] = node['inputs']['sampler_name'] + '_' + node['inputs']['scheduler']
-                    # seed from any regular sampler (no WAS since it takes it as input)
-                    if node['class_type'] in ['KSampler', 'KSamplerAdvanced'] and is_none_or_empty(m['seed']):
-                        m['seed'] = str(node['inputs']['seed'])
-                # seed from Seed node (superseeds any other seed)
-                if node['class_type'] == 'Seed' and not found_seed_node:
-                    found_seed_node = True
-                    m['seed'] = str(node['inputs']['seed'])
             except KeyError as e:
                 log.info('Unable to process ComfyUI node meta, skipping: %s' % e)
                 continue
@@ -575,7 +606,8 @@ def rename_file(file_path, png, image_hash):
 
     # ensure that some major fields exist (with dummy value if necessary)
     for f in ['model', 'seed', 'sampler', 'cfg_scale', 'steps', 'model_hash', 'image_hash']:
-        if f not in meta: meta[f] = '_'
+        #if f not in meta or meta[f] == '': meta[f] = 'n-a'
+        if f not in meta: meta[f] = ''
     # shortened versions
     meta['model_hash_short'] = meta['model_hash'][0:10]
     meta['image_hash_short'] = meta['image_hash'][0:10]
@@ -587,7 +619,7 @@ def rename_file(file_path, png, image_hash):
     except KeyError as e:
         log.warning("Unable to rename [file_path: \"%s\"] due to missing mesa field [%s], skipping ..." % (file_path, e))
         return
-    out_file_name_sanitized = re.sub(r'[^,.;\[\]{}&%#@+\w-]', '_', out_file_name)
+    out_file_name_sanitized = re.sub(r'[^,.;\[\]{}()&%#@+= \w-]', '_', out_file_name)
     out_path = os.path.normpath(os.path.join(path, out_file_name_sanitized))
     use_target_dir = False
     if args.target_dir:
