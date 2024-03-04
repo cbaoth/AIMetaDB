@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
 
-# https://packaging.python.org/en/latest/guides/installing-using-pip-and-virtual-environments/
-# pip install pillow
-# https://pillow.readthedocs.io/en/stable/reference
-# https://pypi.org/project/ImageHash/
-# pip install "thefuzz[speedup]"
-# https://github.com/seatgeek/thefuzz
-# https://github.com/AUTOMATIC1111/stable-diffusion-webui-tokenizer
-
 # TODO
 # add templates to db
 
@@ -128,7 +120,7 @@ def db_connect(db_file):
     try:
         conn = sqlite3.connect(db_file)
         conn.row_factory = sqlite3.Row  # we want dict results (vs plain lists)
-        log.info("DB version: %s" % sqlite3.version)
+        #log.info("DB version: %s" % sqlite3.version) # TODO DEPRECATED
     except Error as e:
         log.error("Unable to create DB connection, exiting: %s" % e)
         sys.exit(1)

@@ -1,0 +1,13 @@
+# https://pip.pypa.io/en/stable/reference/requirements-file-format/
+
+# https://pillow.readthedocs.io/en/stable/reference
+pillow
+
+# https://github.com/seatgeek/thefuzz
+thefuzz[speedup]
+
+# https://pypi.org/project/ImageHash/
+#imagehash
+
+xmltodict
+
