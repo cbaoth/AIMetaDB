@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
 
+# https://packaging.python.org/en/latest/guides/installing-using-pip-and-virtual-environments/
+# pip install pillow
+# https://pillow.readthedocs.io/en/stable/reference
+# https://pypi.org/project/ImageHash/
+# pip install "thefuzz[speedup]"
+# https://github.com/seatgeek/thefuzz
+# https://github.com/AUTOMATIC1111/stable-diffusion-webui-tokenizer
+# all:
+# python -m pip install --user xmltodict "thefuzz[speedup]" pillow
+
 # TODO
 # add templates to db
 
@@ -47,7 +57,7 @@ class MetaType(Enum):
 log = logging
 args = None
 conn = None
-mode = Mode.MATCHDB
+mode = Mode.RENAME
 
 pp = PrettyPrinter(4, 120)
 
@@ -64,7 +74,7 @@ def args_init():
                         help='One or more file names, directories, or glob patterns')
     parser.add_argument('--mode', type=str.upper, default='TOKEYVALUE',
                         choices=['UPDATEDB', 'MATCHDB', 'RENAME', 'TOJSON', 'TOCSV', 'TOKEYVALUE'],
-                        help='Processing mode [UPDATEDB: add file meta to db, MATCHDB: match file meta with db, RENAME: reame files by metadata')
+                        help='Processing mode [RENAME: reame files by metadata, UPDATEDB: add file meta to db, MATCHDB: match file meta with db')
     parser.add_argument('--similarity_min', type=int, default=0,
                         help='Filter matchdb mode results based on similarity >= X [default: 0]')
     parser.add_argument('--sort_matches', action='store_true',
@@ -387,6 +397,13 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
                     m['model'] = os.path.splitext(node['inputs']['ckpt_name'])[0]
                     #if is_none_or_empty(m['clip_skip']):
                     #    m['clip_skip'] = str(node['inputs']['clip_skip'])
+                if node['class_type'] in ['CR Model Merge Stack'] and is_none_or_empty(m['model']):
+                    separator = ''
+                    for i in range(1, 4):
+                        if (node['inputs']['switch_' + str(i)] == "On"):
+                            checkpoint = node['inputs']['ckpt_name' + str(i)].rsplit( ".", 1 )[ 0 ][:15]
+                            m['model'] += separator + checkpoint + '@' + str(round(node['inputs']['model_ratio' + str(i)], 2)) + '%' + str(round(node['inputs']['clip_ratio' + str(i)],2))
+                            separator = '_+_'
                 # seed from Seed node (superseeds any other seed)
                 if node['class_type'] == 'ttN seed' and not found_seed_node:
                     found_seed_node = True
