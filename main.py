@@ -75,12 +75,14 @@ def args_init():
     parser.add_argument('--mode', type=str.upper, default='TOKEYVALUE',
                         choices=['UPDATEDB', 'MATCHDB', 'RENAME', 'TOJSON', 'TOCSV', 'TOKEYVALUE'],
                         help='Processing mode [RENAME: reame files by metadata, UPDATEDB: add file meta to db, MATCHDB: match file meta with db')
-    parser.add_argument('--similarity_min', type=int, default=0,
+    parser.add_argument('--similarity-min', type=int, default=0,
                         help='Filter matchdb mode results based on similarity >= X [default: 0]')
     parser.add_argument('--sort_matches', action='store_true',
                         help='Sort results by similartiy (desc) grouped by infile (WARNING: memory heavy when processing large result sets)')
-    parser.add_argument('--fname_pattern', type=str, default=DEFAULT_FNAME_PATTERN,
+    parser.add_argument('--fname-pattern', type=str, default=DEFAULT_FNAME_PATTERN,
                         help='File renaming pattern for RENAME mode [default: %s]' % DEFAULT_FNAME_PATTERN)  # todo document available fields
+    parser.add_argument('--dname-pattern', type=str,
+                        help='After RENAME move file to the directory named by this pattern, subdirectory will be created if not existing (in local dir or --target-dir), e.g. [{file_cdate_iso}] for ./2022-01-30/')
     parser.add_argument('--no-act', action='store_true',
                         help='Only print what would be done without changing anything (mode = RENAME only)')
     parser.add_argument('--include_png_info', action='store_true',
@@ -93,10 +95,10 @@ def args_init():
                         help='DB file location [default: %s]' % DEFAULT_DB_FILE)
     parser.add_argument('--logfile', type=str, default=DEFAULT_LOG_FILE,
                         help='Log file location [default: %s]' % DEFAULT_LOG_FILE)
-    parser.add_argument('--loglevel_file', type=str.upper, default=DEFAULT_LOGLEVEL_FILE,
+    parser.add_argument('--loglevel-file', type=str.upper, default=DEFAULT_LOGLEVEL_FILE,
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
                         help='Log level for log file [default: %s], loglevel_cl will overwrite if higher' % DEFAULT_LOGLEVEL_FILE)
-    parser.add_argument('--loglevel_cl', type=str.upper, default=DEFAULT_LOGLEVEL_CL,
+    parser.add_argument('--loglevel-cl', type=str.upper, default=DEFAULT_LOGLEVEL_CL,
                         choices=['NONE', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
                         help='Log level for command line output [default: %s], NONE for quiet mode (results only)' % DEFAULT_LOGLEVEL_CL)
     global args, mode
@@ -353,6 +355,8 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
                   "file_mtime": os.path.getmtime(path),
                   "file_ctime_iso": timestamp_to_iso(os.path.getctime(path)),
                   "file_mtime_iso": timestamp_to_iso(os.path.getmtime(path))})
+        m.update({"file_cdate_iso": m['file_ctime_iso'].split("T")[0],
+                  "file_mdate_iso": m['file_mtime_iso'].split("T")[0]})
         # try to find some stuff, due to it's design there could be more than
         # one result, let's just pick the first one we can find
         # TODO add exception handling since we assume a lot of things
@@ -631,12 +635,29 @@ def rename_file(file_path, png, image_hash):
     out_file_name_sanitized = re.sub(r'[^,.;\[\]{}()&%#@+= \w-]', '_', out_file_name)
     out_path = os.path.normpath(os.path.join(path, out_file_name_sanitized))
     use_target_dir = False
+    use_subdir = False
     if args.target_dir:
         use_target_dir = True
         out_path = os.path.normpath(os.path.join(args.target_dir, out_file_name_sanitized))
         if not Path(args.target_dir).exists():
             log.info("The --target-dir '%s' doesn't exist, trying to create it .." % args.target_dir)
             Path(args.target_dir).mkdir()
+    if args.dname_pattern:
+        use_subdir = True
+        sub_dir = args.dname_pattern.format(**meta) + '/'
+        out_dir = ''
+        if use_target_dir:
+            out_dir = os.path.normpath(os.path.join(args.target_dir, sub_dir))
+        else:
+            out_dir = os.path.normpath(os.path.join(sub_dir))
+        out_path = os.path.normpath(os.path.join(out_dir, out_file_name_sanitized))
+        print (out_dir)
+        if not Path(out_dir).exists():
+            if use_target_dir:
+                log.info("The --target-dir '%s' + --dname-pattern '%s' directory '%s' doesn't exist, trying to create it ..", args.target_dir, args.dname_pattern, out_dir)
+            else:
+                log.info("The --dname-pattern '%s' directory '%s' doesn't exist, trying to create it ..", args.dname_pattern, out_dir)
+            Path(out_dir).mkdir()
     if (os.path.normpath(file_path) == out_path):
         log.warning("Outfile identical to infile name [%s], skipping ..." % out_path)
     elif (Path(out_path).exists()):
@@ -646,7 +667,7 @@ def rename_file(file_path, png, image_hash):
         msg = "Would rename: [\"%s\"] -> [\"%s\"]" % (file_path, out_path)
         log.info(msg)
         print(msg)
-    elif (use_target_dir):
+    elif (use_target_dir or use_subdir):
         msg = "Moving: [\"%s\"] -> [\"%s\"]" % (file_path, out_path)
         log.info(msg)
         print(msg)
