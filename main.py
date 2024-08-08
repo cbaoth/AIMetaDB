@@ -33,6 +33,7 @@ from pprint import PrettyPrinter
 #import imagehash
 from enum import Enum
 import shutil
+import re
 
 DEFAULT_FNAME_PATTERN = '{file_ctime_iso}_{image_hash_short}_[app={meta_type_name}, seed={seed}, cfg={cfg_scale}, steps={steps}, sampler={sampler}, model={model}, mhash={model_hash_short}]'
 DEFAULT_DB_FILE = str(Path.home()) + '/ai_meta.db'
@@ -274,6 +275,13 @@ def find_in_dict(obj, key):
 def is_none_or_empty(s):
     return s is None or (isinstance(s, str) and s.strip() == "")
 
+def get_ctime_iso_from_name_or_meta(file_name):
+    pattern = r"\d{4}-\d{2}-\d{2}T\d{6}\.\d{6}"
+    match = re.search(pattern, file_name)
+    if match:
+        return match.group()
+    else:
+        return timestamp_to_iso(os.path.getctime(file_name))
 
 def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=False):
     file_name = os.path.basename(path)
@@ -321,16 +329,16 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
                   "width": sd_meta['image']['width'],
                   "seed": sd_meta['image']['seed'],
                   "image_hash": image_hash,
-                  "file_ctime_iso": timestamp_to_iso(os.path.getctime(path)),
+                  "file_ctime_iso": get_ctime_iso_from_name_or_meta(file_name),
                   "file_mtime_iso": timestamp_to_iso(os.path.getmtime(path))}
     elif sd_meta[META_TYPE_KEY] == MetaType.A1111.value:
         m.update({"meta_type": sd_meta[META_TYPE_KEY],
                   "meta_type_name": MetaType.A1111.name,
                   "file_name": file_name,
                   "image_hash": image_hash,
-                  "file_ctime": os.path.getctime(path),
+                  "file_ctime": os.path.getctime(path), # TODO not primarily take from filename
                   "file_mtime": os.path.getmtime(path),
-                  "file_ctime_iso": timestamp_to_iso(os.path.getctime(path)),
+                  "file_ctime_iso": get_ctime_iso_from_name_or_meta(file_name),
                   "file_mtime_iso": timestamp_to_iso(os.path.getmtime(path))})
         result = m;
     else:  # comfyui
@@ -351,9 +359,9 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
                   "height": png.height,  # take dimensions from png
                   "width": png.width,    # take dimensions from png
                   "image_hash": image_hash,
-                  "file_ctime": os.path.getctime(path),
+                  "file_ctime": os.path.getctime(path), # TODO not primarily take from filename
                   "file_mtime": os.path.getmtime(path),
-                  "file_ctime_iso": timestamp_to_iso(os.path.getctime(path)),
+                  "file_ctime_iso": get_ctime_iso_from_name_or_meta(file_name),
                   "file_mtime_iso": timestamp_to_iso(os.path.getmtime(path))})
         m.update({"file_cdate_iso": m['file_ctime_iso'].split("T")[0],
                   "file_mdate_iso": m['file_mtime_iso'].split("T")[0]})
