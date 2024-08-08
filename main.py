@@ -419,6 +419,12 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
                 if node['class_type'] in ['KSampler', 'KSamplerAdvanced'] and not found_seed_node and is_none_or_empty(m['seed']):
                     m['seed'] = str(node['inputs']['seed'])
                 # sampler
+                if node['class_type'] in ['KSampler Config (rgthree)']:   # always leading for now, overwrite existing values
+                    m['steps'] = str(node['inputs']['steps_total'])
+                    m['cfg_scale'] = str(node['inputs']['cfg'])
+                    m['sampler'] = str(node['inputs']['sampler_name']) + '_' + str(node['inputs']['scheduler'])
+                    if isinstance(node['inputs']['scheduler'], str):
+                        m['sampler'] = node['inputs']['sampler_name'] + '_' + node['inputs']['scheduler']
                 if (node['class_type'] in ['ttN pipeKSampler'] or node['class_type'].startswith('KSampler')) and is_none_or_empty(m['steps']):
                     if is_none_or_empty(m['seed']) and not found_seed_node:
                         try:
@@ -429,7 +435,7 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
                         m['steps'] = str(node['inputs']['steps'])
                     if is_none_or_empty(m['cfg_scale']):
                         m['cfg_scale'] = str(node['inputs']['cfg'])
-                    if is_none_or_empty(m['sampler']):
+                    if is_none_or_empty(m['sampler']) and isinstance(node['inputs']['scheduler'], str):
                         m['sampler'] = node['inputs']['sampler_name'] + '_' + node['inputs']['scheduler']
             except KeyError as e:
                 log.info('Unable to process ComfyUI node meta, skipping: %s' % e)
