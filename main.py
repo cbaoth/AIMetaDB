@@ -23,7 +23,7 @@ import sqlite3
 from sqlite3 import Error
 import xmltodict
 import json
-import sys, os
+import sys, os, io
 import logging
 import hashlib
 import time
@@ -84,6 +84,7 @@ def args_init():
                         help='File renaming pattern for RENAME mode [default: %s]' % DEFAULT_FNAME_PATTERN)  # todo document available fields
     parser.add_argument('--dname-pattern', type=str,
                         help='After RENAME move file to the directory named by this pattern, subdirectory will be created if not existing (in local dir or --target-dir), e.g. [{file_cdate_iso}] for ./2022-01-30/')
+    parser.add_argument('--value-substitution', nargs=2, metavar=('PATTERN', 'REPLACEMENT'), default=[r'', ''], help='Regex pattern and replacement string for value substitution in output modes, e.g. "[\n]" "" or "[\n]" "\n  "')
     parser.add_argument('--no-act', action='store_true',
                         help='Only print what would be done without changing anything (mode = RENAME only)')
     parser.add_argument('--include_png_info', action='store_true',
@@ -202,6 +203,8 @@ def init():
     args_init()
     log_init(args.logfile, args.loglevel_file, args.loglevel_cl)
     db_init(args.dbfile)
+    # Set the standard output encoding to utf-8
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 
 def file_hash(path):
@@ -272,8 +275,22 @@ def find_in_dict(obj, key):
                 return item
 
 
-def is_none_or_empty(s):
-    return s is None or (isinstance(s, str) and s.strip() == "")
+def is_empty_str(s):
+    return s is None or (isinstance(s, str) and len(s.strip()) < 1)
+
+def is_str_set(s):
+    return isinstance(s, str) and len(s.strip()) > 0
+
+def is_str_val_set(d, key):
+    return key in d and isinstance(d[key], str) and len(d[key].strip()) > 0
+
+def next_idx_key(dict, base_key, allow_empty=False):
+    idx = 1
+    key = base_key
+    while key in dict and (allow_empty or (not allow_empty and dict[key])):
+        key = f'{base_key}{idx}'
+        idx += 1
+    return key
 
 def get_ctime_iso_from_name_or_meta(path):
     file_name = os.path.basename(path)
@@ -375,17 +392,30 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
         for node in m['comfyui_workflow']['nodes']:
             try:
                 # prompt
-                if (node['type'] in ['ttN text']) and not found_prompt_node:
-                    if 'prompt' in node['title'].lower():
-                        if 'neg' in node['title'].lower() and is_none_or_empty(m['negative_template']):
-                            m['negative_template'] = node['widgets_values'][0]
-                        elif is_none_or_empty(m['template']):
-                            m['template'] = node['widgets_values'][0]
+                if (node['type'] in ['ttN text']): #and not found_prompt_node:
+                    title = node['title'].lower()
+                    if 'prompt' in title:
+                        if is_str_val_set(node['inputs'], 'positive'):
+                            if 'neg' in title: #and is_empty_str(m['negative_template']):
+                                # TODO redundant code, refactor
+                                k = next_idx_key(m, 'negative_template')
+                                m[k] = node['widgets_values'][0]
+                                try: # TODO might not be possible at all, refactor
+                                    m[k + '_title'] = node['title']
+                                except:
+                                    pass
+                            elif is_empty_str(m['template']):
+                                k = next_idx_key(m, 'template')
+                                m[k] = node['widgets_values'][0]
+                                try: # TODO might not be possible at all, refactor
+                                    m[k + '_title'] = node['title']
+                                except:
+                                    pass
                 ## model
                 #if node['type'] in ['CheckpointLoaderSimple', 'ttN pipeLoader'] and is_none_or_empty(m['model']):
                 #    m['model'] = node['widgets_values'][0]
                 # seed from Seed node (superseeds any other seed)
-                if node['type'] == 'Float' and 'cfg' in node['title'].lower() and is_none_or_empty(m['cfg_scale']):
+                if node['type'] == 'Float' and 'cfg' in node['title'].lower() and is_empty_str(m['cfg_scale']):
                     m['cfg_scale'] = node['widgets_values'][0]
                 if 'seed' in node['type'].lower() and not found_seed_node:
                     found_seed_node = True
@@ -398,53 +428,81 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
         for id in m['comfyui_prompt']:
             try:
                 node = m['comfyui_prompt'][id]
-                # prompt
-                if (node['class_type'].startswith('CLIPTextEncode') or node['class_type'] in ['ttN text']) and not found_prompt_node:
-                    # always prefer nodes with positive and negative prompt (CLIPTextEncodeWildcards3)
-                    if 'positive' in node['inputs']:
-                        found_prompt_node = True
-                        m['prompt'] = node['inputs']['positive']
-                        m['negative_prompt'] = node['inputs']['negative']
+                # prompt, collect all prompts in m['prompt{idx}']
+                ct = node['class_type']
+                if ct.startswith('DPRandomGenerator'):
+                    if is_str_val_set(node['inputs'], 'text'):
+                        # TODO redundant code, refactor
+                        k = next_idx_key(m, 'template')
+                        m[k] = node['inputs']['text']
+                        m[k + '_type'] = ct
+                        m[k + '_title'] = node['title']
+                if ct in ['ShowText|pysssss']:
+                    if is_str_val_set(node['inputs'], 'text2'):
+                        # TODO redundant code, refactor
+                        k = next_idx_key(m, 'text_output')
+                        m[k] = node['inputs']['text2']
+                        m[k + '_type'] = ct
+                        m[k + '_title'] = node['title']
+                if (ct.startswith('CLIPTextEncode') or ct in ['ttN text']): #and not found_prompt_node:
+                    if is_str_val_set(node['inputs'], 'positive'):
+                        # TODO redundant code, refactor
+                        k = next_idx_key(m, 'positive')
+                        m[k] = node['inputs']['positive']
+                        m[k + '_type'] = ct
+                        m[k + '_title'] = node['title']
+                    elif is_str_val_set(node['inputs'], 'text'):
+                        # TODO redundant code, refactor
+                        k = next_idx_key(m, 'prompt')
+                        m[k] = node['inputs']['text']
+                        m[k + '_type'] = ct
+                        m[k + '_title'] = node['title']
+                    if is_str_val_set(node['inputs'], 'negative'):
+                        # TODO redundant code, refactor
+                        k = next_idx_key(m, 'negative')
+                        m[k] = node['inputs']['text']
+                        m[k + '_type'] = ct
+                        m[k + '_title'] = node['title']
                 # model
-                if node['class_type'] in ['CheckpointLoaderSimple', 'ttN pipeLoader'] and is_none_or_empty(m['model']):
-                    m['model'] = os.path.splitext(node['inputs']['ckpt_name'])[0]
+                if ct in ['CheckpointLoaderSimple', 'ttN pipeLoader']: #and is_empty_str(m['model']):
+                    m['model'] += (',_' if m['model'] else '') + os.path.splitext(node['inputs']['ckpt_name'])[0]
                     #if is_none_or_empty(m['clip_skip']):
                     #    m['clip_skip'] = str(node['inputs']['clip_skip'])
-                if node['class_type'] in ['CR Model Merge Stack'] and is_none_or_empty(m['model']):
-                    separator = ''
+                if ct in ['CR Model Merge Stack']: #and is_empty_str(m['model']):
+                    separator = (',_' if m['model'] else '')
                     for i in range(1, 4):
                         if (node['inputs']['switch_' + str(i)] == "On"):
                             checkpoint = node['inputs']['ckpt_name' + str(i)].rsplit( ".", 1 )[ 0 ][:15]
                             m['model'] += separator + checkpoint + '@' + str(round(node['inputs']['model_ratio' + str(i)], 2)) + '%' + str(round(node['inputs']['clip_ratio' + str(i)],2))
                             separator = '_+_'
                 # seed from Seed node (superseeds any other seed)
-                if node['class_type'] == 'ttN seed' and not found_seed_node:
+                if ct == 'ttN seed' and not found_seed_node:
                     found_seed_node = True
                     m['seed'] = str(node['widgets_values'][0])
-                if node['class_type'] == 'Seed' and not found_seed_node:
+                if ct == 'Seed' and not found_seed_node:
                     found_seed_node = True
                     m['seed'] = str(node['inputs']['seed'])
                 # seed from any regular sampler (no WAS since it takes it as input)
-                if node['class_type'] in ['KSampler', 'KSamplerAdvanced'] and not found_seed_node and is_none_or_empty(m['seed']):
+                if ct in ['KSampler', 'KSamplerAdvanced'] and not found_seed_node and is_empty_str(m['seed']):
                     m['seed'] = str(node['inputs']['seed'])
                 # sampler
-                if node['class_type'] in ['KSampler Config (rgthree)']:   # always leading for now, overwrite existing values
+                if ct in ['KSampler Config (rgthree)']:   # always leading for now, overwrite existing values
                     m['steps'] = str(node['inputs']['steps_total'])
                     m['cfg_scale'] = str(node['inputs']['cfg'])
                     m['sampler'] = str(node['inputs']['sampler_name']) + '_' + str(node['inputs']['scheduler'])
                     if isinstance(node['inputs']['scheduler'], str):
                         m['sampler'] = node['inputs']['sampler_name'] + '_' + node['inputs']['scheduler']
-                if (node['class_type'] in ['ttN pipeKSampler'] or node['class_type'].startswith('KSampler')) and is_none_or_empty(m['steps']):
-                    if is_none_or_empty(m['seed']) and not found_seed_node:
+                if (ct in ['ttN pipeKSampler'] or ct.startswith('KSampler')) and is_empty_str(m['steps']):
+                    if is_empty_str(m['seed']) and not found_seed_node:
                         try:
                             m['seed'] = str(node['inputs']['seed'][0])
                         except:
                             m['seed'] = str(node['inputs']['seed'])
-                    if is_none_or_empty(m['steps']):
+                    if is_empty_str(m['steps']):
                         m['steps'] = str(node['inputs']['steps'])
-                    if is_none_or_empty(m['cfg_scale']):
+                    if is_empty_str(m['cfg_scale']):
                         m['cfg_scale'] = str(node['inputs']['cfg'])
-                    if is_none_or_empty(m['sampler']) and isinstance(node['inputs']['scheduler'], str):
+                    if is_empty_str(m['sampler']) and isinstance(node['inputs']['scheduler'], str):
                         m['sampler'] = node['inputs']['sampler_name'] + '_' + node['inputs']['scheduler']
             except KeyError as e:
                 log.info('Unable to process ComfyUI node meta, skipping: %s' % e)
@@ -546,13 +604,11 @@ def print_column_headrs():
     print('in_file_idx | db_file_idx | file_source | similarity | steps | cfg_scale | sampler | height | width | seed | model_hash | model | meta_type | type | image_hash | file_name | file_ctime | file_mtime | app_id | app_version | prompt')
 
 
-def sanitize_value(val, escape_quotes=True):
-    val_str = str(val)
-    # escape double-quotes " in prompt (promt will be within " on output)
-    # replace all newline with spaces
-    result = re.sub(r'(["\\])', r'\\\1', val_str) if escape_quotes else val_str
-    result = re.sub(r'\r?\n', r' ', result).strip()
-    return result
+def sanitize_value(value, tostr=True):
+    if not isinstance(value, str) and not tostr:
+        return value
+    pattern, replacement = args.value_substitution
+    return re.sub(pattern, replacement, str(value))
 
 
 def timestamp_to_iso(ts):
@@ -656,7 +712,7 @@ def rename_file(file_path, png, image_hash):
         out_path = os.path.normpath(os.path.join(args.target_dir, out_file_name_sanitized))
         if not Path(args.target_dir).exists():
             log.info("The --target-dir '%s' doesn't exist, trying to create it .." % args.target_dir)
-            Path(args.target_dir).mkdir()
+            Path(args.target_dir).mkdir(parents=True, exist_ok=True)
     if args.dname_pattern:
         use_subdir = True
         sub_dir = args.dname_pattern.format(**meta) + '/'
@@ -672,7 +728,7 @@ def rename_file(file_path, png, image_hash):
                 log.info("The --target-dir '%s' + --dname-pattern '%s' directory '%s' doesn't exist, trying to create it ..", args.target_dir, args.dname_pattern, out_dir)
             else:
                 log.info("The --dname-pattern '%s' directory '%s' doesn't exist, trying to create it ..", args.dname_pattern, out_dir)
-            Path(out_dir).mkdir()
+            Path(out_dir).mkdir(parents=True, exist_ok=True)
     if (os.path.normpath(file_path) == out_path):
         log.warning("Outfile identical to infile name [%s], skipping ..." % out_path)
     elif (Path(out_path).exists()):
@@ -724,9 +780,21 @@ def print_file_meta_keyvalue(path, png, image_hash, include_png_info=False):
         log.warning("Unable to read meta from [file_path: \"%s\"], skipping .." % path)
         log.debug(e)
         return
-    for key, val in file_meta.items():
-        print("%s: %s" % (key, sanitize_value(val)))
 
+    ordered_keys = ['comfyui_prompt', 'comfyui_workflow']
+    for key in ordered_keys:
+        val = sanitize_value(file_meta[key])
+        print("%s: %s" % (key, val.encode('utf-8', errors='replace').decode('utf-8')))
+
+    # group by 'prefix_' if present
+    def custom_sort_key(key):
+        parts = key.split('_')
+        return tuple(parts)
+
+    sorted_keys = sorted(file_meta.keys(), key=custom_sort_key)
+    for key in sorted_keys:
+        val = sanitize_value(file_meta[key])
+        print("%s: %s" % (key, val.encode('utf-8', errors='replace').decode('utf-8')))
 
 def process_file(file_path, idx):
     try:
