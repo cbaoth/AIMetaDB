@@ -104,6 +104,8 @@ def args_init():
     parser.add_argument('--loglevel-cl', type=str.upper, default=DEFAULT_LOGLEVEL_CL,
                         choices=['NONE', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
                         help='Log level for command line output [default: %s], NONE for quiet mode (results only)' % DEFAULT_LOGLEVEL_CL)
+    parser.add_argument('--force-overwrite', '-f', action='store_true',
+                        help='Force overwrite existing files')
     global args, mode
     args = parser.parse_args()
     mode = Mode[args.mode]
@@ -745,14 +747,20 @@ def rename_file(file_path, png, image_hash):
             Path(out_dir).mkdir(parents=True, exist_ok=True)
     if (os.path.normpath(file_path) == out_path):
         log.warning("Outfile identical to infile name [%s], skipping ..." % out_path)
-    elif (Path(out_path).exists()):
+        return
+    elif (Path(out_path).exists() and not args.force_overwrite):
         log.warning("File with same name exists [%s], skipping ..." % out_path)
-        # TODO add --force-overwirte option
+        return
     elif (args.no_act):
         msg = "Would rename: [\"%s\"] -> [\"%s\"]" % (file_path, out_path)
         log.info(msg)
         print(msg)
-    elif (use_target_dir or use_subdir):
+        return
+
+    if (Path(out_path).exists() and args.force_overwrite):
+        log.info("File with same name exists [%s], overwriting ..." % out_path)
+
+    if (use_target_dir or use_subdir):
         msg = "Moving: [\"%s\"] -> [\"%s\"]" % (file_path, out_path)
         log.info(msg)
         print(msg)
