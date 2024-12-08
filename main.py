@@ -84,7 +84,8 @@ def args_init():
                         help='File renaming pattern for RENAME mode [default: %s]' % DEFAULT_FNAME_PATTERN)  # todo document available fields
     parser.add_argument('--dname-pattern', type=str,
                         help='After RENAME move file to the directory named by this pattern, subdirectory will be created if not existing (in local dir or --target-dir), e.g. [{file_cdate_iso}] for ./2022-01-30/')
-    parser.add_argument('--value-substitution', nargs=2, metavar=('PATTERN', 'REPLACEMENT'), default=[r'', ''], help='Regex pattern and replacement string for value substitution in output modes, e.g. "[\n]" "" or "[\n]" "\n  "')
+    parser.add_argument('--key-substitution', nargs=2, metavar=('PATTERN', 'REPLACEMENT'), default=[r'$', ': '], help='Regex for key substitution in TOKEYVALUE mode, e.g. "$" "\t" or "^(.*)$" "\n== \1 ==\n  ", default: "$" ": "')
+    parser.add_argument('--value-substitution', nargs=2, metavar=('PATTERN', 'REPLACEMENT'), default=[r'', ''], help='Regex for value substitution in TOKEYVALUE mode, e.g. "[\n]" "", default: "" ""')
     parser.add_argument('--no-act', action='store_true',
                         help='Only print what would be done without changing anything (mode = RENAME only)')
     parser.add_argument('--include_png_info', action='store_true',
@@ -603,8 +604,21 @@ def print_column_headrs():
     # TODO support custom pattern
     print('in_file_idx | db_file_idx | file_source | similarity | steps | cfg_scale | sampler | height | width | seed | model_hash | model | meta_type | type | image_hash | file_name | file_ctime | file_mtime | app_id | app_version | prompt')
 
+def sanitize_value(val, escape_quotes=True):
+    val_str = str(val)
+    # escape double-quotes " in prompt (promt will be within " on output)
+    # replace all newline with spaces
+    result = re.sub(r'(["\\])', r'\\\1', val_str) if escape_quotes else val_str
+    result = re.sub(r'\r?\n', r' ', result).strip()
+    return result
 
-def sanitize_value(value, tostr=True):
+def substitute_key(value, tostr=True):
+    if not isinstance(value, str) and not tostr:
+        return value
+    pattern, replacement = args.key_substitution
+    return re.sub(pattern, replacement, str(value))
+
+def substitute_value(value, tostr=True):
     if not isinstance(value, str) and not tostr:
         return value
     pattern, replacement = args.value_substitution
@@ -783,8 +797,8 @@ def print_file_meta_keyvalue(path, png, image_hash, include_png_info=False):
 
     ordered_keys = ['comfyui_prompt', 'comfyui_workflow']
     for key in ordered_keys:
-        val = sanitize_value(file_meta[key])
-        print("%s: %s" % (key, val.encode('utf-8', errors='replace').decode('utf-8')))
+        val = substitute_value(file_meta[key])
+        print("%s%s" % (substitute_key(key, ": "), val.encode('utf-8', errors='replace').decode('utf-8')))
 
     # group by 'prefix_' if present
     def custom_sort_key(key):
@@ -793,8 +807,8 @@ def print_file_meta_keyvalue(path, png, image_hash, include_png_info=False):
 
     sorted_keys = sorted(file_meta.keys(), key=custom_sort_key)
     for key in sorted_keys:
-        val = sanitize_value(file_meta[key])
-        print("%s: %s" % (key, val.encode('utf-8', errors='replace').decode('utf-8')))
+        val = substitute_value(file_meta[key])
+        print("%s%s" % (substitute_key(key, ": "), val.encode('utf-8', errors='replace').decode('utf-8')))
 
 def process_file(file_path, idx):
     try:
