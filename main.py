@@ -105,7 +105,7 @@ def args_init():
                         choices=['NONE', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
                         help='Log level for command line output [default: %s], NONE for quiet mode (results only)' % DEFAULT_LOGLEVEL_CL)
     parser.add_argument('--force-overwrite', '-f', action='store_true',
-                        help='Force overwrite existing files')
+                        help='Force overwrite existing files [default: append index]')
     global args, mode
     args = parser.parse_args()
     mode = Mode[args.mode]
@@ -267,7 +267,6 @@ def a1111_meta_to_dict_to_json(params):
     return result
     #nSteps: 20, Sampler: Euler a, CFG scale: 8.5, Seed: 2518596816, Size: 512x768, Model hash: 7dd744682a'
 
-
 # https://stackoverflow.com/a/14962509
 def find_in_dict(obj, key):
     if key in obj: return obj[key]
@@ -276,7 +275,6 @@ def find_in_dict(obj, key):
             item = find_in_dict(v, key)
             if item is not None:
                 return item
-
 
 def is_empty_str(s):
     return s is None or (isinstance(s, str) and len(s.strip()) < 1)
@@ -303,6 +301,9 @@ def get_ctime_iso_from_name_or_meta(path):
         return match.group()
     else:
         return timestamp_to_iso(os.path.getctime(path))
+
+def truncate_str(s, length):
+    return (s[:length] + '..') if len(s) > length else s
 
 def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=False):
     file_name = os.path.basename(path)
@@ -708,11 +709,13 @@ def rename_file(file_path, png, image_hash):
     for f in ['model', 'seed', 'sampler', 'cfg_scale', 'steps', 'model_hash', 'image_hash']:
         #if f not in meta or meta[f] == '': meta[f] = 'n-a'
         if f not in meta: meta[f] = ''
-    # shortened versions
-    meta['model_hash_short'] = meta['model_hash'][0:10]
-    meta['image_hash_short'] = meta['image_hash'][0:10]
-    meta['file_ctime_iso'] = meta['file_ctime_iso'].replace(':', '') # strip specials
-    meta['file_mtime_iso'] = meta['file_mtime_iso'].replace(':', '') # strip specials
+    # truncate some values to reduce likelihood of too long filenames
+    meta['model'] = truncate_str(meta.get('model', ''), 50)
+    meta['model_hash_short'] = meta.get('model_hash', '')[0:10]
+    meta['image_hash_short'] = meta.get('image_hash', '')[0:10]
+    # strip specials from iso datetime
+    meta['file_ctime_iso'] = meta.get('file_ctime_iso', '').replace(':', '')
+    meta['file_mtime_iso'] = meta.get('file_mtime_iso', '').replace(':', '')
 
     try:
         out_file_name = args.fname_pattern.format(**meta) + meta['file_ext']
@@ -749,8 +752,17 @@ def rename_file(file_path, png, image_hash):
         log.warning("Outfile identical to infile name [%s], skipping ..." % out_path)
         return
     elif (Path(out_path).exists() and not args.force_overwrite):
-        log.warning("File with same name exists [%s], skipping ..." % out_path)
-        return
+        base, ext = os.path.splitext(out_path)
+        for i in range(1, 10000):
+            new_out_suffix = f"-{i:04d}"
+            new_out_path = f"{base}{new_out_suffix}{ext}"
+            if not Path(new_out_path).exists():
+                log.warning("File with same name exists [%s], adding suffix [%s]..." % (out_path, new_out_suffix))
+                out_path = new_out_path
+                break
+        else:
+            log.warning("File with same name exists [%s], all suffixes -0001 to -9999 already in use, skipping ..." % out_path)
+            return
     elif (args.no_act):
         msg = "Would rename: [\"%s\"] -> [\"%s\"]" % (file_path, out_path)
         log.info(msg)
@@ -758,7 +770,7 @@ def rename_file(file_path, png, image_hash):
         return
 
     if (Path(out_path).exists() and args.force_overwrite):
-        log.info("File with same name exists [%s], overwriting ..." % out_path)
+        log.info("File with same name already exists [%s], overwriting ..." % out_path)
 
     if (use_target_dir or use_subdir):
         msg = "Moving: [\"%s\"] -> [\"%s\"]" % (file_path, out_path)
