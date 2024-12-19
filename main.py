@@ -337,7 +337,10 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, verbose_png_info=Fal
             # even if verbose_comfyui_info=False, they following two are loaded (needed for data extraction) but not returned
             sd_meta['comfyui_prompt'] = json.loads(meta_dict['prompt'])
             sd_meta['comfyui_workflow'] = json.loads(meta_dict['workflow'])
-            sd_meta['parameters'] = a1111_meta_to_dict_to_json(meta_dict['parameters']) # empty dict/json if none/empty
+            if 'parameters' in meta_dict:
+                sd_meta['parameters'] = a1111_meta_to_dict_to_json(meta_dict['parameters'])
+            else:
+                sd_meta['parameters'] = {}
             sd_meta[META_TYPE_KEY] = MetaType.COMFYUI.value
         elif ('parameters' in meta_dict):   # a1111
             sd_meta = a1111_meta_to_dict_to_json(meta_dict['parameters'])
@@ -346,7 +349,7 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, verbose_png_info=Fal
         else:
             raise InvalidMeta("No known meta found in [file_path:\"%s\"]" % path)
     except KeyError as e:
-        log.warning("No known meta found in [file_path: %s]" % path)
+        log.error("Error while extracting basic meta from [file_path: %s]\n  -> %s" % (path, e))
         raise InvalidMeta(e)
     png_info = meta_dict if png_meta_as_dict else json.dumps(meta_dict)
     m = sd_meta.copy()
