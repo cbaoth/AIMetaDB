@@ -33,7 +33,6 @@ from pprint import PrettyPrinter
 #import imagehash
 from enum import Enum
 import shutil
-import re
 
 DEFAULT_FNAME_PATTERN = '{file_ctime_iso}_{image_hash_short}_[app={meta_type_name}, seed={seed}, cfg={cfg_scale}, steps={steps}, sampler={sampler}, model={model}, mhash={model_hash_short}]'
 DEFAULT_DB_FILE = str(Path.home()) + '/ai_meta.db'
@@ -81,15 +80,19 @@ def args_init():
     parser.add_argument('--sort_matches', action='store_true',
                         help='Sort results by similartiy (desc) grouped by infile (WARNING: memory heavy when processing large result sets)')
     parser.add_argument('--fname-pattern', type=str, default=DEFAULT_FNAME_PATTERN,
-                        help='File renaming pattern for RENAME mode [default: %s]' % DEFAULT_FNAME_PATTERN)  # todo document available fields
+                        help='File renaming pattern for RENAME mode [default: %s], use "" to keep original name (move only)' % DEFAULT_FNAME_PATTERN)  # todo document available fields
     parser.add_argument('--dname-pattern', type=str,
                         help='After RENAME move file to the directory named by this pattern, subdirectory will be created if not existing (in local dir or --target-dir), e.g. [{file_cdate_iso}] for ./2022-01-30/')
+    #parser.add_argument('--fname-pattern-keep', action='store_true',
+    #                    help='Keep original file name in RENAME mode (append pattern to original name)')
     parser.add_argument('--key-substitution', nargs=2, metavar=('PATTERN', 'REPLACEMENT'), default=[r'$', ': '], help='Regex for key substitution in TOKEYVALUE mode, e.g. "$" "\t" or "^(.*)$" "\n== \1 ==\n  ", default: "$" ": "')
     parser.add_argument('--value-substitution', nargs=2, metavar=('PATTERN', 'REPLACEMENT'), default=[r'', ''], help='Regex for value substitution in TOKEYVALUE mode, e.g. "[\n]" "", default: "" ""')
     parser.add_argument('--no-act', action='store_true',
                         help='Only print what would be done without changing anything (mode = RENAME only)')
-    parser.add_argument('--include_png_info', action='store_true',
-                        help='Include full png_info when printing meta (mode = TOJSON|TOKEYVALUE only)')
+    parser.add_argument('--verbose-png-info', action='store_true',
+                        help='Include full png_info (unformatted dump) when printing meta (mode = TOJSON|TOKEYVALUE only)')
+    parser.add_argument('--verbose-comfyui-info', action='store_true',
+                        help='Include full comfyui prompt and workflow when printing meta (mode = TOJSON|TOKEYVALUE only)')
     parser.add_argument('--recursive', action='store_true',
                         help='Process directories and ** glob patterns recursively')
     parser.add_argument('--target-dir', type=str,
@@ -104,7 +107,7 @@ def args_init():
     parser.add_argument('--loglevel-cl', type=str.upper, default=DEFAULT_LOGLEVEL_CL,
                         choices=['NONE', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
                         help='Log level for command line output [default: %s], NONE for quiet mode (results only)' % DEFAULT_LOGLEVEL_CL)
-    parser.add_argument('--force-overwrite', '-f', action='store_true',
+    parser.add_argument('--force-overwrite', action='store_true',
                         help='Force overwrite existing files [default: append index]')
     global args, mode
     args = parser.parse_args()
@@ -194,9 +197,9 @@ def db_init(dbfile):
         #cur.execute('update meta set meta_type = 1')
         #conn.commit()
 
-        cur.execute(sql_create_meta_table);
+        cur.execute(sql_create_meta_table)
         #log.info("Ensuring DB table exists: json")
-        #cur.execute(sql_create_meta_json_table);
+        #cur.execute(sql_create_meta_json_table)
     except Error as e:
         log.error("Unable to initialize DB, exiting:\n%s" % e)
         sys.exit(1)
@@ -223,32 +226,44 @@ def file_hash(path):
 
 
 def a1111_meta_to_dict_to_json(params):
+    # return empty json if no params
+    if (params is None or len(params.strip()) < 1):
+        return {}
     #[p, s] = re.split(r'\n(Steps: )', params)   # FIXME comple all regex globally
     #try:
     result = {}
+    # find r",\sExtra info:\s(.*)" and (re)move it into result['extra_info']
+    extra_info = re.findall(r",\s+Extra info:\s((.|\n)+)", params) #re.findall(r",\sExtra info:\s((?:.|\n)*?)\n(?=\w+:)", params)
+    if (len(extra_info) > 0):
+        result['extra_info'] = extra_info[0][0].strip()
+        params = re.sub(r",\s+Extra info:\s((.|\n)+)", "", params)
+
     is_prompt = True
     last_key = ""
+    result['prompt'] = ""
     for l in re.split(r'\n', params):
-        # first line is always prompt (w/o prefix)
-        if (is_prompt):
-            result['prompt'] = l
-            is_prompt = False
+        # collect prompt lines until a line starts with a known attribute
+        if is_prompt and not re.match(r'^\w+(\s\w+)?:\s', l):
+            result['prompt'] += l + " "
             continue
+        else:
+            is_prompt = False
         # at least 4 of the known core attributes in current line? (crude check)
-        if (len(re.findall(r'(steps|sampler|size|seed|model hash|cfg scale): ', l, flags=re.IGNORECASE)) >= 4):
+        if (len(re.findall(r'\b(Steps|Sampler|Size|Seed|Model hash|CFG scale): ', l, flags=re.IGNORECASE)) >= 4):
             # convert to dict
             result.update(dict(map(lambda e: [e[0].lower().strip().replace(' ', '_'), e[1].strip()], re.findall(r'[, ]*([^:]+): ([^,]+)?', l))))
-        elif (re.match(r'^[\w -]+: ', l)): # TODO improve, multi-line template might have lines starting like this
+        elif (re.match(r'^\w+(\s\w+)?:\s', l)): # TODO improve, multi-line template might have lines starting like this
             # add to dict
             key = re.sub(r'^([^:]+):.*', r'\1', l).lower().strip().replace(' ', '_')
-            val = re.sub(r'^[^:]+: *(.*)', r'\1', l).strip()
+            val = re.sub(r'^[^:]+:\s(.*)', r'\1', l).strip()
             result[key] = val
             last_key = key
         else:
             # continue multi-line field (append)
             if (last_key == ""):
-                continue # ignore continueation of first line (redundant prompt)
+                continue # ignore continuation of first line (redundant prompt)
             result[last_key] += " " + l.strip()
+    result['prompt'] = result['prompt'].strip()
 
     # does this look like a1111 meta? (crude check)
     re_exp_find = r'([{}|]|__)'
@@ -305,7 +320,8 @@ def get_ctime_iso_from_name_or_meta(path):
 def truncate_str(s, length):
     return (s[:length] + '..') if len(s) > length else s
 
-def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=False):
+# TODO verify if verbose_comfyui_info=False works for all calls, generally review rarely used CSV, DB, etc. functionalities
+def get_meta(path, png, image_hash, png_meta_as_dict=False, verbose_png_info=False, verbose_comfyui_info=False):
     file_name = os.path.basename(path)
     try:
         meta_dict = png.info
@@ -316,14 +332,17 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
             sd_meta = json.loads(meta_dict['sd-metadata'])
             sd_meta[META_TYPE_KEY] = MetaType.INVOKEAI.value
             meta_dict['sd-metadata'] = sd_meta  # overwrite json-string with dict
+        elif ('workflow' in meta_dict):   # comfyui
+            sd_meta = {}
+            # even if verbose_comfyui_info=False, they following two are loaded (needed for data extraction) but not returned
+            sd_meta['comfyui_prompt'] = json.loads(meta_dict['prompt'])
+            sd_meta['comfyui_workflow'] = json.loads(meta_dict['workflow'])
+            sd_meta['parameters'] = a1111_meta_to_dict_to_json(meta_dict['parameters']) # empty dict/json if none/empty
+            sd_meta[META_TYPE_KEY] = MetaType.COMFYUI.value
         elif ('parameters' in meta_dict):   # a1111
             sd_meta = a1111_meta_to_dict_to_json(meta_dict['parameters'])
             sd_meta[META_TYPE_KEY] = MetaType.A1111.value
-        elif ('workflow' in meta_dict):   # comfyui
-            sd_meta = {}
-            sd_meta['comfyui_prompt'] = json.loads(meta_dict['prompt'])
-            sd_meta['comfyui_workflow'] = json.loads(meta_dict['workflow'])
-            sd_meta[META_TYPE_KEY] = MetaType.COMFYUI.value
+
         else:
             raise InvalidMeta("No known meta found in [file_path:\"%s\"]" % path)
     except KeyError as e:
@@ -332,7 +351,6 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
     png_info = meta_dict if png_meta_as_dict else json.dumps(meta_dict)
     m = sd_meta.copy()
     if sd_meta[META_TYPE_KEY] == MetaType.INVOKEAI.value:
-
         # TODO add all fields (update m with flattened keys)
         result = {"meta_type": sd_meta[META_TYPE_KEY],
                   "meta_type_name": MetaType.INVOKEAI.name,
@@ -360,9 +378,9 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
                   "image_hash": image_hash,
                   "file_ctime": os.path.getctime(path), # TODO not primarily take from filename
                   "file_mtime": os.path.getmtime(path),
-                  "file_ctime_iso": get_ctime_iso_from_name_or_meta(pth),
+                  "file_ctime_iso": get_ctime_iso_from_name_or_meta(path),
                   "file_mtime_iso": timestamp_to_iso(os.path.getmtime(path))})
-        result = m;
+        result = m
     else:  # comfyui
         m.update({"meta_type": sd_meta[META_TYPE_KEY],
                   "meta_type_name": MetaType.COMFYUI.name,
@@ -384,7 +402,9 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
                   "file_ctime": os.path.getctime(path), # TODO not primarily take from filename
                   "file_mtime": os.path.getmtime(path),
                   "file_ctime_iso": get_ctime_iso_from_name_or_meta(path),
-                  "file_mtime_iso": timestamp_to_iso(os.path.getmtime(path))})
+                  "file_mtime_iso": timestamp_to_iso(os.path.getmtime(path)),
+                  #"parameters": m['parameters']
+                  })
         m.update({"file_cdate_iso": m['file_ctime_iso'].split("T")[0],
                   "file_mdate_iso": m['file_mtime_iso'].split("T")[0]})
         # try to find some stuff, due to it's design there could be more than
@@ -511,13 +531,18 @@ def get_meta(path, png, image_hash, png_meta_as_dict=False, include_png_info=Fal
             except KeyError as e:
                 log.info('Unable to process ComfyUI node meta, skipping: %s' % e)
                 continue
-        result = m;
+        result = m
 
     if ('XML:com.adobe.xmp' in meta_dict):
         xmp = xmltodict.parse(meta_dict['XML:com.adobe.xmp'])
         result['rating'] = find_in_dict(xmp, 'xmp:Rating')
-    if include_png_info:
+    if verbose_png_info:
         result['png_info'] = png_info
+    if not verbose_comfyui_info:
+        if 'comfyui_prompt' in result:
+            del result['comfyui_prompt']
+        if 'comfyui_workflow' in result:
+            del result['comfyui_workflow']
     log.debug('Meta extracted: %s' % pp.pformat(result))
     return result
 
@@ -545,14 +570,14 @@ def db_insert_meta(path, png, image_hash):
                                  :image_hash, :file_ctime, :file_mtime);"""
     try:
         cur = conn.cursor()
-        meta_values = get_meta(path, png, image_hash, include_png_info=True);
+        meta_values = get_meta(path, png, image_hash) # TODO verify verbose_png_info=True, ...
         log.debug("DB INSERT into meta: %s" % str(meta_values))
         cur.execute(sql_insert_meta, meta_values)
         conn.commit()
     except InvalidMeta as e:
         log.warning("Unable to read meta from [file_path: \"%s\"], skipping .." % path)
         log.debug(e)
-        return;
+        return
     except sqlite3.IntegrityError:
         res = cur.execute("SELECT file_name FROM meta WHERE image_hash = ?", (image_hash,))
         # todo: compare file names
@@ -579,14 +604,14 @@ def db_update_meta(path, png, image_hash):
                          WHERE image_hash = :image_hash;"""
     try:
         cur = conn.cursor()
-        meta_values = get_meta(path, png, image_hash, include_png_info=True);
+        meta_values = get_meta(path, png, image_hash) # TODO verify verbose_png_info=True, ...
         log.debug("DB UPDATE into meta: %s" % str(meta_values))
         cur.execute(sql_update_meta, meta_values)
         conn.commit()
     except InvalidMeta as e:
         log.warning("Unable to read meta from [file_path: \"%s\"], skipping .." % path)
         log.debug(e)
-        return;
+        return
     except Error as e:
         log.error("Failed to update existing meta in DB, transaction rollback:\n" % e)
         conn.rollback()
@@ -603,16 +628,20 @@ def db_update_or_create_meta(path, png, image_hash):
         db_update_meta(path, png, image_hash)
 
 
-def print_column_headrs():
+def print_column_headers():
     # TODO support custom pattern
     print('in_file_idx | db_file_idx | file_source | similarity | steps | cfg_scale | sampler | height | width | seed | model_hash | model | meta_type | type | image_hash | file_name | file_ctime | file_mtime | app_id | app_version | prompt')
 
-def sanitize_value(val, escape_quotes=True):
+def sanitize_value_for_csv(val, escape_quotes=True):
     val_str = str(val)
-    # escape double-quotes " in prompt (promt will be within " on output)
+    # escape double-quotes " in prompt (prompt will be within " on output)
     # replace all newline with spaces
     result = re.sub(r'(["\\])', r'\\\1', val_str) if escape_quotes else val_str
     result = re.sub(r'\r?\n', r' ', result).strip()
+    return result
+
+def sanitize_value(val, escape_quotes=True):
+    result = re.sub(r'\r?\n', r' ', str(val)).strip()
     return result
 
 def substitute_key(value, tostr=True):
@@ -695,35 +724,53 @@ def db_match(path, png, image_hash, idx, sort=False):
 
 
 def rename_file(file_path, png, image_hash):
-    # FIXME split path an fname, currently filename must be first (path is included)
-    try:
-        meta = get_meta(file_path, png, image_hash)
-    except InvalidMeta as e:
-        log.warning("Unable to read meta from [file_path: \"%s\"], skipping .." % file_path)
-        log.debug(e)
-        return
-    path = os.path.split(file_path)[0]
-    [meta['file_name_noext'], meta['file_ext']] = os.path.splitext(meta['file_name'])
+    #keep_filename = False
+    #in_filename = os.path.basename(file_path)
+    #if args.fname_pattern_keep and re.match(args.fname_pattern_keep, in_filename):
+    #    keep_filename = True
 
-    # ensure that some major fields exist (with dummy value if necessary)
-    for f in ['model', 'seed', 'sampler', 'cfg_scale', 'steps', 'model_hash', 'image_hash']:
-        #if f not in meta or meta[f] == '': meta[f] = 'n-a'
-        if f not in meta: meta[f] = ''
-    # truncate some values to reduce likelihood of too long filenames
-    meta['model'] = truncate_str(meta.get('model', ''), 50)
-    meta['model_hash_short'] = meta.get('model_hash', '')[0:10]
-    meta['image_hash_short'] = meta.get('image_hash', '')[0:10]
-    # strip specials from iso datetime
-    meta['file_ctime_iso'] = meta.get('file_ctime_iso', '').replace(':', '')
-    meta['file_mtime_iso'] = meta.get('file_mtime_iso', '').replace(':', '')
+    # load and prepare meta data, but only if necessary
+    out_file_name_sanitized = None
+    out_path = None
+    if not args.fname_pattern and not args.dname_pattern:
+        log.info("Neither --fname-pattern nor --dname-pattern provided, no need to load metadata ..")
+    else:
+        # FIXME split path an fname, currently filename must be first (path is included)
+        try:
+            meta = get_meta(file_path, png, image_hash)
+        except InvalidMeta as e:
+            log.warning("Unable to read meta from [file_path: \"%s\"], skipping .." % file_path)
+            log.debug(e)
+            return
+        [meta['file_name_noext'], meta['file_ext']] = os.path.splitext(meta['file_name'])
 
-    try:
-        out_file_name = args.fname_pattern.format(**meta) + meta['file_ext']
-    except KeyError as e:
-        log.warning("Unable to rename [file_path: \"%s\"] due to missing mesa field [%s], skipping ..." % (file_path, e))
-        return
-    out_file_name_sanitized = re.sub(r'[^,.;\[\]{}()&%#@+= \w-]', '_', out_file_name)
-    out_path = os.path.normpath(os.path.join(path, out_file_name_sanitized))
+        # ensure that some major fields exist (with dummy value if necessary)
+        for f in ['model', 'seed', 'sampler', 'cfg_scale', 'steps', 'model_hash', 'image_hash']:
+            #if f not in meta or meta[f] == '': meta[f] = 'n-a'
+            if f not in meta: meta[f] = ''
+        # truncate some values to reduce likelihood of too long filenames
+        meta['model'] = truncate_str(meta.get('model', ''), 50)
+        meta['model_hash_short'] = meta.get('model_hash', '')[0:10]
+        meta['image_hash_short'] = meta.get('image_hash', '')[0:10]
+        # strip specials from iso datetime
+        meta['file_ctime_iso'] = meta.get('file_ctime_iso', '').replace(':', '')
+        meta['file_mtime_iso'] = meta.get('file_mtime_iso', '').replace(':', '')
+
+        if args.fname_pattern:
+            try:
+                out_file_name = args.fname_pattern.format(**meta) + meta['file_ext']
+            except KeyError as e:
+                log.warning("Unable to rename [file_path: \"%s\"] due to missing mesa field [%s], skipping ..." % (file_path, e))
+                return
+            out_file_name_sanitized = re.sub(r'[^,.;\[\]{}()&%#@+= \w-]', '_', out_file_name)
+            out_path = os.path.normpath(os.path.join(os.path.split(file_path)[0], out_file_name_sanitized))
+
+    # initialize out_path and out_file_name_sanitized if not set
+    if out_path is None or out_file_name_sanitized is None:
+        # TODO most likely not needed, but depending on source vs. target FS this might still be relevant
+        out_file_name_sanitized = re.sub(r'[^,.;\[\]{}()&%#@+= \w-]', '_', os.path.basename(file_path))
+        out_path = os.path.normpath(os.path.join(os.path.split(file_path)[0], out_file_name_sanitized))
+
     use_target_dir = False
     use_subdir = False
     if args.target_dir:
@@ -769,11 +816,20 @@ def rename_file(file_path, png, image_hash):
         print(msg)
         return
 
+    # skip if source and target are the same
+    if (os.path.normpath(file_path) == out_path):
+        log.warning("Outfile identical to infile name [%s], skipping ..." % out_path)
+        return
+
+    # overwrite target file only if --force-overwrite is set
     if (Path(out_path).exists() and args.force_overwrite):
         log.info("File with same name already exists [%s], overwriting ..." % out_path)
 
+    # move or rename file
     if (use_target_dir or use_subdir):
         msg = "Moving: [\"%s\"] -> [\"%s\"]" % (file_path, out_path)
+        if (os.path.basename(file_path) == out_file_name_sanitized):
+            msg = "Moving, filename unchanged: [\"%s\"] -> [\"%s\"]" % (file_path, out_path)
         log.info(msg)
         print(msg)
         shutil.move(file_path, out_path)
@@ -784,9 +840,9 @@ def rename_file(file_path, png, image_hash):
         os.rename(file_path, out_path)
 
 
-def print_file_meta_json(path, png, image_hash, include_png_info=False):
+def print_file_meta_json(path, png, image_hash, verbose_png_info=False, verbose_comfyui_info=False):
     try:
-        file_meta = get_meta(path, png, image_hash, png_meta_as_dict=True, include_png_info=include_png_info)
+        file_meta = get_meta(path, png, image_hash, png_meta_as_dict=True, verbose_png_info=verbose_png_info, verbose_comfyui_info=verbose_comfyui_info)
     except InvalidMeta as e:
         log.warning("Unable to read meta from [file_path: \"%s\"], skipping .." % path)
         log.debug(e)
@@ -797,35 +853,54 @@ def print_file_meta_json(path, png, image_hash, include_png_info=False):
 def print_file_meta_csv(path, png, image_hash):
     print_pattern = "%s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | \"%s\" | \"%s\""
     try:
-        file_meta = get_meta(path, png, image_hash)
+        file_meta = get_meta(path, png, image_hash) # verbose png_info and comfyui_info not supported
     except InvalidMeta as e:
         log.warning("Unable to read meta from [file_path: \"%s\"], skipping .." % path)
         log.debug(e)
         return
-    file_meta['prompt'] = sanitize_value(file_meta['prompt'])
+    file_meta['prompt'] = sanitize_value_for_csv(file_meta['prompt'])
     print(print_pattern % meta_to_output_tuple(file_meta))
 
 
-def print_file_meta_keyvalue(path, png, image_hash, include_png_info=False):
+def print_file_meta_keyvalue(path, png, image_hash, verbose_png_info=False, verbose_comfyui_info=False):
     try:
-        file_meta = get_meta(path, png, image_hash, include_png_info=include_png_info)
+        file_meta = get_meta(path, png, image_hash, verbose_png_info=verbose_png_info, verbose_comfyui_info=verbose_comfyui_info)
         #file_meta.pop('png_meta')  # don't print png_meta
     except InvalidMeta as e:
         log.warning("Unable to read meta from [file_path: \"%s\"], skipping .." % path)
         log.debug(e)
         return
 
-    ordered_keys = ['comfyui_prompt', 'comfyui_workflow']
+    # output core dicts in the given order
+    # note that depending on e.g. the use of --include-comfy-info some keys might not be present
+    ordered_keys = ['png_info', 'comfyui_workflow', 'comfyui_prompt', 'parameters']
     for key in ordered_keys:
-        val = substitute_value(file_meta[key])
-        print("%s%s" % (substitute_key(key, ": "), val.encode('utf-8', errors='replace').decode('utf-8')))
+        if key not in file_meta:
+            continue
+        val = file_meta[key].copy() # copy since we may modify it below, and we still need the original
+        # remove extra_info from parameters if verbose_comfyui_info=False
+        # we already pretty-print it below, this is just a raw dump
+        if not verbose_comfyui_info and key == 'parameters':
+            if 'extra_info' in file_meta[key]:
+                val.pop('extra_info')
+        try:
+            print("%s%s" % (substitute_key(key, ": "), json.dumps(val, indent=2).encode('utf-8', errors='replace').decode('utf-8')))
+        except Error as e:
+            val = substitute_value(val)
+            print("%s%s" % (substitute_key(key, ": "), val.encode('utf-8', errors='replace').decode('utf-8')))
 
-    # group by 'prefix_' if present
+    # if existing print extra_info from parameters again formatted
+    if 'parameters' in file_meta and 'extra_info' in file_meta['parameters']:
+        val = substitute_value(file_meta['parameters']['extra_info'])
+        print("%s%s" % (substitute_key('parameter.extra_info', ": "), val.encode('utf-8', errors='replace').decode('utf-8')))
+
+    # group keys by '_' e.g. prefix_middle_suffix -> (prefix, middle, suffix)
     def custom_sort_key(key):
         parts = key.split('_')
         return tuple(parts)
 
-    sorted_keys = sorted(file_meta.keys(), key=custom_sort_key)
+    # sort and output the remaining keys (ordered_keys removed) in alphabetical order and grouped by '_'
+    sorted_keys = sorted([key for key in file_meta.keys() if key not in ordered_keys], key=custom_sort_key)
     for key in sorted_keys:
         val = substitute_value(file_meta[key])
         print("%s%s" % (substitute_key(key, ": "), val.encode('utf-8', errors='replace').decode('utf-8')))
@@ -855,16 +930,16 @@ def process_file(file_path, idx):
     if (mode == Mode.UPDATEDB):
         db_update_or_create_meta(file_path, png, image_hash)
     elif (mode == Mode.MATCHDB):
-        print_column_headrs()
+        print_column_headers()
         db_match(file_path, png, image_hash, idx, args.sort_matches)
     elif (mode == Mode.RENAME):
         rename_file(file_path, png, image_hash)
     elif (mode == Mode.TOJSON):
-        print_file_meta_json(file_path, png, image_hash, include_png_info=args.include_png_info)
+        print_file_meta_json(file_path, png, image_hash, verbose_png_info=args.verbose_png_info, verbose_comfyui_info=args.verbose_comfyui_info)
     elif (mode == Mode.TOCSV):
         print_file_meta_csv(file_path, png, image_hash)
     elif (mode == Mode.TOKEYVALUE):
-        print_file_meta_keyvalue(file_path, png, image_hash, include_png_info=args.include_png_info)
+        print_file_meta_keyvalue(file_path, png, image_hash, verbose_png_info=args.verbose_png_info, verbose_comfyui_info=args.verbose_comfyui_info)
     else:  # should never happen
         log.error("Unknown mode: %s" % mode)
         sys.exit(1)

@@ -1,4 +1,5 @@
 .venv
 .vscode
+.zcompdump
 ai_meta.db
 ai_meta.log
